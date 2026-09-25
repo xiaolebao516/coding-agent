@@ -1,0 +1,17 @@
+README.md
+pyproject.toml
+src/coding_agent/__init__.py
+src/coding_agent/agent.py
+src/coding_agent/cli.py
+src/coding_agent/config.py
+src/coding_agent/contracts.py
+src/coding_agent/model.py
+src/coding_agent/runtime.py
+src/coding_agent/trajectory.py
+src/coding_agent.egg-info/PKG-INFO
+src/coding_agent.egg-info/SOURCES.txt
+src/coding_agent.egg-info/dependency_links.txt
+src/coding_agent.egg-info/requires.txt
+src/coding_agent.egg-info/top_level.txt
+src/coding_agent/tools/__init__.py
+src/coding_agent/tools/bash.py
