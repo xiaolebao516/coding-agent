@@ -39,6 +39,7 @@ class StopReason(str, Enum):
     MODEL_FINISHED = "model_finished"
     MAX_STEPS = "max_steps"
     BUDGET_EXHAUSTED = "budget_exhausted"
+    BUDGET_UNKNOWN = "budget_unknown"
     MODEL_ERROR = "model_error"
     RUNTIME_ERROR = "runtime_error"
 
@@ -48,4 +49,3 @@ class AgentResult:
     final_message: str | None
     steps: int
     usage: Usage = field(default_factory=Usage)
-
