@@ -13,7 +13,46 @@ from coding_agent.model import FakeModel
 from coding_agent.runtime.base import ProcessResult
 from coding_agent.tools.bash import BashTool
 from coding_agent.tools.registry import ToolRegistry
+from coding_agent.trajectory import RecorderState, TrajectoryRecorder
 
+
+def make_task(
+    task_id: str = "test-task",
+    problem_statement: str = "anything",
+) -> Task:
+    return Task(
+        task_id=task_id,
+        problem_statement=problem_statement,
+    )
+
+
+def make_registry() -> ToolRegistry:
+    return ToolRegistry([BashTool()])
+
+
+def make_agent(
+    model,
+    *,
+    max_steps: int = 4,
+    budget: float | None = 1.0,
+) -> Agent:
+    return Agent(
+        model=model,
+        tool_registry=make_registry(),
+        max_steps=max_steps,
+        budget=budget,
+    )
+
+
+def bash_call(
+    command: str = "echo hello",
+    call_id: str = "call_1",
+) -> ToolCall:
+    return ToolCall(
+        id=call_id,
+        name="bash",
+        arguments={"command": command},
+    )
 
 class FakeRuntime:
     def run_process(self, argv: list[str]) -> ProcessResult:
@@ -87,6 +126,7 @@ def test_agent_happy_path():
     result = agent.run(
         task=task,
         runtime=runtime,
+        recorder=TrajectoryRecorder(),
     )
 
     assert result.stop_reason == StopReason.MODEL_FINISHED
@@ -135,6 +175,7 @@ def test_agent_stops_at_max_steps():
     result = agent.run(
         task=task,
         runtime=runtime,
+        recorder=TrajectoryRecorder(),
     )
     assert result.stop_reason == StopReason.MAX_STEPS
     assert result.steps == 2
@@ -186,6 +227,7 @@ def test_agent_budget_control():
     result = agent.run(
         task=task,
         runtime=runtime,
+        recorder=TrajectoryRecorder(),
     )
 
     assert result.stop_reason == StopReason.BUDGET_EXHAUSTED
@@ -239,6 +281,7 @@ def test_agent_stops_when_budget_becomes_unknown():
     result = agent.run(
         task=task,
         runtime=runtime,
+        recorder=TrajectoryRecorder(),
     )
 
     assert result.stop_reason == StopReason.BUDGET_UNKNOWN
@@ -295,6 +338,7 @@ def test_agent_recovers_from_unknown_tool():
     result = agent.run(
         task=task,
         runtime=runtime,
+        recorder=TrajectoryRecorder(),
     )
     second_history = model.histories[1]
 
@@ -343,6 +387,7 @@ def test_agent_feeds_command_failure_back_to_model():
     result = agent.run(
         task=task,
         runtime=runtime,
+        recorder=TrajectoryRecorder(),
     )
     second_history = model.histories[1]
 
@@ -377,7 +422,11 @@ def test_agent_stops_on_model_error():
 
     runtime = FakeRuntime()
 
-    result = agent.run(task=task, runtime=runtime)
+    result = agent.run(
+        task=task,
+        runtime=runtime,
+        recorder=TrajectoryRecorder(),
+    )
 
     assert result.stop_reason == StopReason.MODEL_ERROR
     assert result.steps == 0
@@ -427,8 +476,186 @@ def test_agent_stops_on_runtime_error():
 
     runtime = FailingRuntime()
 
-    result = agent.run(task=task, runtime=runtime)
+    result = agent.run(
+        task=task,
+        runtime=runtime,
+        recorder=TrajectoryRecorder(),
+    )
 
     assert result.stop_reason == StopReason.RUNTIME_ERROR
     assert result.steps == 1
     assert result.final_message is None
+
+
+def test_agent_trajectory_start_and_finalize():
+    model = FakeModel(
+        [
+            ModelResponse(
+                content=None,
+                tool_call=bash_call(),
+                usage=Usage(1000, 1000, 0.01),
+            ),
+            ModelResponse(
+                content="done",
+                tool_call=None,
+                usage=Usage(1000, 1000, 0.01),
+            ),
+        ]
+    )
+
+    agent = make_agent(model)
+    recorder = TrajectoryRecorder()
+
+    result = agent.run(
+        task=make_task(),
+        runtime=FakeRuntime(),
+        recorder=recorder,
+    )
+
+    trajectory = recorder.trajectory
+
+    assert trajectory is not None
+    assert trajectory.steps == result.steps
+    assert trajectory.total_usage == result.usage
+    assert trajectory.stop_reason == result.stop_reason
+    assert trajectory.final_message == result.final_message
+    assert recorder.state == RecorderState.FINISHED
+    event_types = [event.type for event in trajectory.events]
+
+    assert event_types == [
+        "model_response",
+        "tool_result",
+        "model_response",
+        "terminal",
+    ]
+
+
+def test_agent_records_ordered_trajectory_events():
+    call = bash_call()
+
+    model = FakeModel(
+        [
+            ModelResponse(
+                content=None,
+                tool_call=call,
+                usage=Usage(100, 20, 0.01),
+            ),
+            ModelResponse(
+                content="done",
+                tool_call=None,
+                usage=Usage(50, 10, 0.01),
+            ),
+        ]
+    )
+
+    agent = make_agent(model)
+    recorder = TrajectoryRecorder()
+
+    result = agent.run(
+        task=make_task(),
+        runtime=FakeRuntime(),
+        recorder=recorder,
+    )
+
+    trajectory = recorder.trajectory
+    assert trajectory is not None
+
+    event_types = [event.type for event in trajectory.events]
+
+    assert event_types == [
+        "model_response",
+        "tool_result",
+        "model_response",
+        "terminal",
+    ]
+
+    assert trajectory.stop_reason == result.stop_reason
+    assert trajectory.steps == result.steps
+    assert trajectory.total_usage == result.usage
+
+
+def test_agent_records_unknown_tool_in_trajectory():
+    unknown_call = ToolCall(
+        id="unknown-1",
+        name="python",
+        arguments={"command": "python test.py"},
+    )
+
+    model = FakeModel(
+        [
+            ModelResponse(
+                content=None,
+                tool_call=unknown_call,
+                usage=Usage(100, 20, 0.01),
+            ),
+            ModelResponse(
+                content="done",
+                tool_call=None,
+                usage=Usage(50, 10, 0.01),
+            ),
+        ]
+    )
+
+    agent = make_agent(model)
+    recorder = TrajectoryRecorder()
+
+    result = agent.run(
+        task=make_task(),
+        runtime=FakeRuntime(),
+        recorder=recorder,
+    )
+
+    trajectory = recorder.trajectory
+    assert trajectory is not None
+
+    assert [event.type for event in trajectory.events] == [
+        "model_response",
+        "tool_result",
+        "model_response",
+        "terminal",
+    ]
+
+    tool_event = trajectory.events[1]
+
+    assert tool_event.data["return_code"] is None
+    assert tool_event.data["error"] == "unknown tool: python"
+
+    assert trajectory.events[-1].data["stop_reason"] == result.stop_reason.value
+
+
+def test_agent_records_runtime_error_in_trajectory():
+    model = FakeModel(
+        [
+            ModelResponse(
+                content=None,
+                tool_call=bash_call(),
+                usage=Usage(100, 20, 0.01),
+            ),
+        ]
+    )
+
+    agent = make_agent(model)
+    recorder = TrajectoryRecorder()
+
+    result = agent.run(
+        task=make_task(),
+        runtime=FailingRuntime(),
+        recorder=recorder,
+    )
+
+    trajectory = recorder.trajectory
+    assert trajectory is not None
+
+    assert [event.type for event in trajectory.events] == [
+        "model_response",
+        "runtime_error",
+        "terminal",
+    ]
+
+    error_event = trajectory.events[1]
+
+    assert error_event.data["error_type"] == "RuntimeError"
+    assert error_event.data["message"] == "container unavailable"
+
+    assert result.stop_reason == StopReason.RUNTIME_ERROR
+    assert trajectory.stop_reason == StopReason.RUNTIME_ERROR
