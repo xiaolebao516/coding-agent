@@ -152,17 +152,37 @@ def usage_from_deepseek(raw_usage: dict[str, Any] | None, model: str) -> Usage:
 
     TODO(Wu): implement. Spec = tests/test_deepseek.py::test_usage_*
     """
-    raise NotImplementedError
+    if raw_usage is None:
+        return Usage()
+    
+    input_tokens = raw_usage.get("prompt_tokens")
+    cache_read_tokens = raw_usage.get("prompt_cache_hit_tokens")
+    output_tokens = raw_usage.get("completion_tokens")
+    usage = Usage(
+                input_tokens=input_tokens,
+                cache_read_tokens=cache_read_tokens,
+                output_tokens=output_tokens,
+                cost_usd=None,
+            )
+    
+    if cache_read_tokens is None or input_tokens is None or output_tokens is None:
+        return usage
 
+    try:
+        cost_usd = _cost_usd(model, input_tokens, cache_read_tokens, output_tokens)
+        if cost_usd > 0:
+            usage.cost_usd = cost_usd
+
+    except Exception:
+        pass
+    return usage
 
 def parse_deepseek_response(raw: dict[str, Any], model: str) -> ModelResponse:
     message = raw["choices"][0]["message"]
     tool_calls = message.get("tool_calls") or []
 
     if len(tool_calls) > 1:
-        raise ValueError(
-            f"expected at most one tool call, got {len(tool_calls)}"
-        )
+        raise ValueError(f"expected at most one tool call, got {len(tool_calls)}")
 
     tool_call = None
     if tool_calls:
