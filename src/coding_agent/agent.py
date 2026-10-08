@@ -1,15 +1,7 @@
 import json
 from typing import Any
 
-from coding_agent.contracts import (
-    AgentResult,
-    Cost,
-    Money,
-    StopReason,
-    Task,
-    ToolResult,
-    Usage,
-)
+from coding_agent.contracts import AgentResult, StopReason, Task, ToolResult
 from coding_agent.model import Model
 from coding_agent.runtime.base import Runtime
 from coding_agent.tools.registry import ToolRegistry
@@ -23,71 +15,22 @@ def _add_optional(a, b):
     return a + b
 
 
-def _merge_cost(
-    total: Cost | None,
-    current: Cost | None,
-) -> Cost | None:
-    if total is None or current is None:
-        return None
-
-    if total.money.currency != current.money.currency:
-        raise ValueError("cannot merge costs with different currencies")
-
-    if total.source != current.source:
-        raise ValueError("cannot merge costs with different sources")
-
-    return Cost(
-        money=Money(
-            amount=total.money.amount + current.money.amount,
-            currency=total.money.currency,
-        ),
-        source=total.source,
-    )
-
-
-def _merge_usage(
-    total: Usage | None,
-    current: Usage,
-) -> Usage:
-    if total is None:
-        return current
-
+def _merge_usage(total: Usage, current: Usage) -> Usage:
     return Usage(
-        input_tokens=_add_optional(
-            total.input_tokens,
-            current.input_tokens,
+        input_tokens=_add_optional(total.input_tokens, current.input_tokens),
+        cache_read_tokens=_add_optional(
+            total.cache_read_tokens, current.cache_read_tokens
         ),
-        output_tokens=_add_optional(
-            total.output_tokens,
-            current.output_tokens,
-        ),
-        cost=_merge_cost(
-            total.cost,
-            current.cost,
-        ),
+        output_tokens=_add_optional(total.output_tokens, current.output_tokens),
+        cost_usd=_add_optional(total.cost_usd, current.cost_usd),
     )
 
 
-def _budget_stop_reason(
-    usage: Usage | None,
-    budget: Money,
-) -> StopReason | None:
-    # 还没发生任何成功的模型调用，可以继续。
-    if usage is None:
-        return None
-
-    # 已经调用过模型，但不知道花了多少钱。
-    if usage.cost is None:
+def _budget_stop_reason(usage: Usage, budget: float) -> StopReason | None:
+    if usage.cost_usd is None:
         return StopReason.BUDGET_UNKNOWN
-
-    cost = usage.cost.money
-
-    if cost.currency != budget.currency:
-        raise ValueError("cost currency does not match budget currency")
-
-    if cost.amount >= budget.amount:
+    if usage.cost_usd >= budget:
         return StopReason.BUDGET_EXHAUSTED
-
     return None
 
 
@@ -109,7 +52,9 @@ class Agent:
     ) -> AgentResult:
         recorder.start(task.task_id, self.max_steps, self.budget)
         steps = 0
-        total_usage = Usage(0, 0, 0.0)
+        total_usage = Usage(
+            input_tokens=0, cache_read_tokens=0, output_tokens=0, cost_usd=0.0
+        )
         history: list[dict[str, Any]] = [
             {
                 "role": "user",

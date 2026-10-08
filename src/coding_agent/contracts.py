@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any
 from enum import Enum
-from decimal import Decimal
 
 
 @dataclass
@@ -24,11 +23,12 @@ class ToolResult:
     timed_out: bool = False
     error: str | None = None
 
-@dataclass
+@dataclass(kw_only=True)
 class Usage:
-    input_tokens: int | None = None
+    input_tokens: int | None = None  # total prompt tokens, including cache hits
+    cache_read_tokens: int | None = None  # subset of input_tokens served from cache
     output_tokens: int | None = None
-    cost_usd: float | None = None
+    cost_usd: float | None = None  # computed from a price table; None = unknown
 
 @dataclass
 class ModelResponse:
@@ -51,18 +51,3 @@ class AgentResult:
     steps: int
     usage: Usage = field(default_factory=Usage)
 
-
-@dataclass(frozen=True)
-class Money:
-    amount: Decimal
-    currency: str
-
-
-@dataclass(frozen=True)
-class Cost:
-    money: Money
-    source: Literal[
-        "balance_delta",
-        "estimated",
-        "provider_reported",
-    ]

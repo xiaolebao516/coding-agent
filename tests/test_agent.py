@@ -1,3 +1,4 @@
+import pytest
 import copy
 
 from coding_agent.model import FakeModel
@@ -146,9 +147,9 @@ def test_agent_stops_at_max_steps():
 
     model = FakeModel(
         [
-            ModelResponse(content=None, tool_call=bash_call, usage=Usage(0, 0, 0.0)),
-            ModelResponse(content=None, tool_call=bash_call, usage=Usage(0, 0, 0.0)),
-            ModelResponse(content=None, tool_call=bash_call, usage=Usage(0, 0, 0.0)),
+            ModelResponse(content=None, tool_call=bash_call, usage=Usage(input_tokens=0, output_tokens=0, cost_usd=0.0)),
+            ModelResponse(content=None, tool_call=bash_call, usage=Usage(input_tokens=0, output_tokens=0, cost_usd=0.0)),
+            ModelResponse(content=None, tool_call=bash_call, usage=Usage(input_tokens=0, output_tokens=0, cost_usd=0.0)),
         ]
     )
 
@@ -192,10 +193,10 @@ def test_agent_budget_control():
     model = FakeModel(
         [
             ModelResponse(
-                content=None, tool_call=bash_call, usage=Usage(1000, 1000, 0.01)
+                content=None, tool_call=bash_call, usage=Usage(input_tokens=1000, output_tokens=1000, cost_usd=0.01)
             ),
             ModelResponse(
-                content=None, tool_call=bash_call, usage=Usage(1500, 1500, 0.015)
+                content=None, tool_call=bash_call, usage=Usage(input_tokens=1500, output_tokens=1500, cost_usd=0.015)
             ),
             ModelResponse(
                 content=None,
@@ -245,7 +246,7 @@ def test_agent_stops_when_budget_becomes_unknown():
     model = FakeModel(
         [
             ModelResponse(
-                content=None, tool_call=bash_call, usage=Usage(1000, 1000, 0.01)
+                content=None, tool_call=bash_call, usage=Usage(input_tokens=1000, output_tokens=1000, cost_usd=0.01)
             ),
             ModelResponse(
                 content=None,
@@ -304,13 +305,13 @@ def test_agent_recovers_from_unknown_tool():
     model = RecordingFakeModel(
         [
             ModelResponse(
-                content=None, tool_call=python_call, usage=Usage(1000, 1000, 0.01)
+                content=None, tool_call=python_call, usage=Usage(input_tokens=1000, output_tokens=1000, cost_usd=0.01)
             ),
             ModelResponse(
-                content=None, tool_call=bash_call, usage=Usage(1000, 1000, 0.01)
+                content=None, tool_call=bash_call, usage=Usage(input_tokens=1000, output_tokens=1000, cost_usd=0.01)
             ),
             ModelResponse(
-                content=None, tool_call=None, usage=Usage(1000, 1000, 0.01)
+                content=None, tool_call=None, usage=Usage(input_tokens=1000, output_tokens=1000, cost_usd=0.01)
             ),
         ]
     )
@@ -356,10 +357,10 @@ def test_agent_feeds_command_failure_back_to_model():
                     id="call_1",
                     name="bash",
                     arguments={"command":"pytest -q"}
-                ), usage=Usage(1000, 1000, 0.01)
+                ), usage=Usage(input_tokens=1000, output_tokens=1000, cost_usd=0.01)
             ),
             ModelResponse(
-                content="done",tool_call=None, usage=Usage(1000, 1000, 0.01)
+                content="done",tool_call=None, usage=Usage(input_tokens=1000, output_tokens=1000, cost_usd=0.01)
             ),
         ]
     )
@@ -447,7 +448,7 @@ def test_agent_stops_on_runtime_error():
     model = FakeModel(
             [
                 ModelResponse(
-                    content=None, tool_call=bash_call, usage=Usage(1000, 1000, 0.01)
+                    content=None, tool_call=bash_call, usage=Usage(input_tokens=1000, output_tokens=1000, cost_usd=0.01)
                 ),
                 ModelResponse(
                     content=None,
@@ -493,12 +494,12 @@ def test_agent_trajectory_start_and_finalize():
             ModelResponse(
                 content=None,
                 tool_call=bash_call(),
-                usage=Usage(1000, 1000, 0.01),
+                usage=Usage(input_tokens=1000, output_tokens=1000, cost_usd=0.01),
             ),
             ModelResponse(
                 content="done",
                 tool_call=None,
-                usage=Usage(1000, 1000, 0.01),
+                usage=Usage(input_tokens=1000, output_tokens=1000, cost_usd=0.01),
             ),
         ]
     )
@@ -538,12 +539,12 @@ def test_agent_records_ordered_trajectory_events():
             ModelResponse(
                 content=None,
                 tool_call=call,
-                usage=Usage(100, 20, 0.01),
+                usage=Usage(input_tokens=100, output_tokens=20, cost_usd=0.01),
             ),
             ModelResponse(
                 content="done",
                 tool_call=None,
-                usage=Usage(50, 10, 0.01),
+                usage=Usage(input_tokens=50, output_tokens=10, cost_usd=0.01),
             ),
         ]
     )
@@ -586,12 +587,12 @@ def test_agent_records_unknown_tool_in_trajectory():
             ModelResponse(
                 content=None,
                 tool_call=unknown_call,
-                usage=Usage(100, 20, 0.01),
+                usage=Usage(input_tokens=100, output_tokens=20, cost_usd=0.01),
             ),
             ModelResponse(
                 content="done",
                 tool_call=None,
-                usage=Usage(50, 10, 0.01),
+                usage=Usage(input_tokens=50, output_tokens=10, cost_usd=0.01),
             ),
         ]
     )
@@ -629,7 +630,7 @@ def test_agent_records_runtime_error_in_trajectory():
             ModelResponse(
                 content=None,
                 tool_call=bash_call(),
-                usage=Usage(100, 20, 0.01),
+                usage=Usage(input_tokens=100, output_tokens=20, cost_usd=0.01),
             ),
         ]
     )
@@ -659,3 +660,33 @@ def test_agent_records_runtime_error_in_trajectory():
 
     assert result.stop_reason == StopReason.RUNTIME_ERROR
     assert trajectory.stop_reason == StopReason.RUNTIME_ERROR
+
+
+def test_merge_usage_sums_cache_read_tokens():
+    from coding_agent.agent import _merge_usage
+
+    total = _merge_usage(
+        Usage(input_tokens=100, cache_read_tokens=80, output_tokens=10, cost_usd=0.01),
+        Usage(input_tokens=200, cache_read_tokens=150, output_tokens=20, cost_usd=0.02),
+    )
+
+    assert total.input_tokens == 300
+    assert total.cache_read_tokens == 230
+    assert total.output_tokens == 30
+    assert total.cost_usd == pytest.approx(0.03)
+
+
+def test_merge_usage_unknown_cache_tokens_stay_unknown():
+    from coding_agent.agent import _merge_usage
+
+    total = _merge_usage(
+        Usage(input_tokens=100, cache_read_tokens=0, output_tokens=10, cost_usd=0.0),
+        Usage(input_tokens=100, cache_read_tokens=None, output_tokens=10, cost_usd=0.0),
+    )
+
+    assert total.cache_read_tokens is None
+
+
+def test_usage_rejects_positional_arguments():
+    with pytest.raises(TypeError):
+        Usage(100, 20, 0.01)
