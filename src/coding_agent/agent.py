@@ -1,7 +1,15 @@
 import json
 from typing import Any
 
-from coding_agent.contracts import AgentResult, StopReason, Task, ToolResult
+from coding_agent.contracts import (
+    AgentResult,
+    Cost,
+    Money,
+    StopReason,
+    Task,
+    ToolResult,
+    Usage,
+)
 from coding_agent.model import Model
 from coding_agent.runtime.base import Runtime
 from coding_agent.tools.registry import ToolRegistry
@@ -15,7 +23,35 @@ def _add_optional(a, b):
     return a + b
 
 
-def _merge_usage(total: Usage, current: Usage) -> Usage:
+def _merge_cost(
+    total: Cost | None,
+    current: Cost | None,
+) -> Cost | None:
+    if total is None or current is None:
+        return None
+
+    if total.money.currency != current.money.currency:
+        raise ValueError("cannot merge costs with different currencies")
+
+    if total.source != current.source:
+        raise ValueError("cannot merge costs with different sources")
+
+    return Cost(
+        money=Money(
+            amount=total.money.amount + current.money.amount,
+            currency=total.money.currency,
+        ),
+        source=total.source,
+    )
+
+
+def _merge_usage(
+    total: Usage | None,
+    current: Usage,
+) -> Usage:
+    if total is None:
+        return current
+
     return Usage(
         input_tokens=_add_optional(
             total.input_tokens,
@@ -25,18 +61,31 @@ def _merge_usage(total: Usage, current: Usage) -> Usage:
             total.output_tokens,
             current.output_tokens,
         ),
-        cost_usd=_add_optional(
-            total.cost_usd,
-            current.cost_usd,
+        cost=_merge_cost(
+            total.cost,
+            current.cost,
         ),
     )
 
 
-def _budget_stop_reason(usage: Usage, budget: float) -> StopReason | None:
-    if usage.cost_usd is None:
+def _budget_stop_reason(
+    usage: Usage | None,
+    budget: Money,
+) -> StopReason | None:
+    # 还没发生任何成功的模型调用，可以继续。
+    if usage is None:
+        return None
+
+    # 已经调用过模型，但不知道花了多少钱。
+    if usage.cost is None:
         return StopReason.BUDGET_UNKNOWN
 
-    if usage.cost_usd >= budget:
+    cost = usage.cost.money
+
+    if cost.currency != budget.currency:
+        raise ValueError("cost currency does not match budget currency")
+
+    if cost.amount >= budget.amount:
         return StopReason.BUDGET_EXHAUSTED
 
     return None

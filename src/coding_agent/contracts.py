@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 from enum import Enum
+from decimal import Decimal
 
 
 @dataclass
@@ -49,3 +50,19 @@ class AgentResult:
     final_message: str | None
     steps: int
     usage: Usage = field(default_factory=Usage)
+
+
+@dataclass(frozen=True)
+class Money:
+    amount: Decimal
+    currency: str
+
+
+@dataclass(frozen=True)
+class Cost:
+    money: Money
+    source: Literal[
+        "balance_delta",
+        "estimated",
+        "provider_reported",
+    ]
