@@ -1,7 +1,7 @@
 import json
 from typing import Any
 
-from coding_agent.contracts import AgentResult, StopReason, Task, ToolResult
+from coding_agent.contracts import AgentResult, ModelFinishReason, StopReason, Task, ToolResult
 from coding_agent.model import Model
 from coding_agent.runtime.base import Runtime
 from coding_agent.tools.registry import ToolRegistry
@@ -105,6 +105,7 @@ class Agent:
                                 else None
                             ),
                             "usage": response.usage,
+                            "finish_reason": response.finish_reason.value
                         },
                     )
                 )
@@ -123,6 +124,14 @@ class Agent:
                 )
                 break
             total_usage = _merge_usage(total_usage, response.usage)
+            if response.finish_reason == ModelFinishReason.OUTPUT_TRUNCATED:
+                result = AgentResult(
+                    StopReason.OUTPUT_TRUNCATED,
+                    final_message=None,
+                    steps=steps,
+                    usage=total_usage,
+                )
+                break
             final_message = response.content
             if response.tool_call is None:
                 result = AgentResult(

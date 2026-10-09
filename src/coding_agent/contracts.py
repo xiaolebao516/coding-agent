@@ -30,14 +30,21 @@ class Usage:
     output_tokens: int | None = None
     cost_usd: float | None = None  # computed from a price table; None = unknown
 
+class ModelFinishReason(str, Enum):
+    FINISHED = "finished"
+    OUTPUT_TRUNCATED = "output_truncated"
+
+
 @dataclass
 class ModelResponse:
     content: str | None
     tool_call: ToolCall | None
     usage: Usage = field(default_factory=Usage)
+    finish_reason: ModelFinishReason = ModelFinishReason.FINISHED
 
 class StopReason(str, Enum):
     MODEL_FINISHED = "model_finished"
+    OUTPUT_TRUNCATED = "output_truncated"
     MAX_STEPS = "max_steps"
     BUDGET_EXHAUSTED = "budget_exhausted"
     BUDGET_UNKNOWN = "budget_unknown"
