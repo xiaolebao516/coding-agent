@@ -9,7 +9,7 @@ from coding_agent.model import FakeModel
 from coding_agent.runtime.base import ProcessResult
 from coding_agent.tools.bash import BashTool
 from coding_agent.tools.registry import ToolRegistry
-
+from types import SimpleNamespace
 
 class LifecycleFakeRuntime:
     def __init__(self):
@@ -166,7 +166,13 @@ def test_main_composes_real_dependencies_without_leaking_key(monkeypatch, tmp_pa
 
     monkeypatch.setattr(cli, "DeepSeekModel", fake_deepseek_model)
     monkeypatch.setattr(cli, "DockerRuntime", fake_docker_runtime)
-
+    monkeypatch.setattr(
+        cli,
+        "DeepSeekBilling",
+        lambda **kwargs: SimpleNamespace(
+            is_available=lambda: True,
+        ),
+    )
     trajectory_path = tmp_path / "trajectory.json"
     main(
         [
@@ -186,3 +192,28 @@ def test_main_composes_real_dependencies_without_leaking_key(monkeypatch, tmp_pa
     assert data["provider"] == "deepseek"
     assert data["model"] == "deepseek-flash"
     assert secret not in raw
+
+
+def test_main_rejects_unavailable_balance(monkeypatch, tmp_path):
+    monkeypatch.setenv(API_KEY_ENV, "test-key")
+
+    monkeypatch.setattr(
+        cli,
+        "DeepSeekBilling",
+        lambda **kwargs: SimpleNamespace(
+            is_available=lambda: False,
+        ),
+    )
+    monkeypatch.setattr(cli, "DockerRuntime", _forbid("DockerRuntime"))
+
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "--task-id",
+                "smoke",
+                "--problem",
+                "test",
+                "--workspace",
+                str(tmp_path),
+            ]
+        )

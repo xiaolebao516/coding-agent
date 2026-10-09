@@ -216,6 +216,7 @@ class DeepSeekModel:
         model: str = "deepseek-flash",
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = 120.0,
+        max_output_tokens: int | None = None,
     ):
         _require_price_entry(model)
         self._api_key = api_key
@@ -223,9 +224,13 @@ class DeepSeekModel:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self._tools = to_deepseek_tools(tool_specs)
+        if max_output_tokens is not None and max_output_tokens < 1:
+            raise ValueError("max_output_tokens must be positive")
+
+        self.max_output_tokens = max_output_tokens
 
     def build_payload(self, history: list[dict[str, Any]]) -> dict[str, Any]:
-        return {
+        payload = {
             "model": self.model,
             "messages": to_deepseek_messages(history),
             "tools": self._tools,
@@ -233,6 +238,10 @@ class DeepSeekModel:
             # reasoning_content back during tool-call turns.
             "thinking": {"type": "disabled"},
         }
+        if self.max_output_tokens is not None:
+            payload["max_tokens"] = self.max_output_tokens
+
+        return payload
 
     def generate(self, history: list[dict[str, Any]]) -> ModelResponse:
         raw = self._post(self.build_payload(history))

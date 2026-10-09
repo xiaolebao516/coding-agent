@@ -2,18 +2,20 @@ import argparse
 import json
 import os
 from pathlib import Path
-
 from coding_agent.agent import Agent
 from coding_agent.contracts import Task
 from coding_agent.deepseek import DeepSeekModel
+from coding_agent.gemini import GeminiModel
 from coding_agent.model import Model
 from coding_agent.runtime.base import Runtime
 from coding_agent.runtime.docker import DockerRuntime
 from coding_agent.tools.bash import BashTool
 from coding_agent.tools.registry import ToolRegistry
 from coding_agent.trajectory import TrajectoryRecorder
+from coding_agent.deepseek_billing import DeepSeekBilling
 
 API_KEY_ENV = "DEEPSEEK_API_KEY"
+GEMINI_API_KEY_ENV = "GEMINI_API_KEY"
 
 def run_once(
     task: Task,
@@ -21,7 +23,7 @@ def run_once(
     registry: ToolRegistry,
     runtime: Runtime,
     max_steps: int,
-    budget: float,
+    budget: float | None,
     trajectory_path: str,
 ):
     agent = Agent(
@@ -84,6 +86,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--provider",
+        choices=["deepseek", "gemini"],
+        default="deepseek",
+    )
+
+    parser.add_argument(
         "--budget",
         type=float,
         default=1.0,
@@ -104,14 +112,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--model",
-        default="deepseek-flash",
-        help="DeepSeek model name.",
+        default="None",
+        help="Model name.",
     )
 
     parser.add_argument(
         "--trajectory-path",
         default="trajectory.json",
         help="Where to save the trajectory JSON.",
+    )
+
+    parser.add_argument(
+        "--max-output-tokens",
+        type=int,
+        default=None,
     )
 
     return parser
@@ -123,9 +137,20 @@ def main(argv: list[str] | None = None) -> None:
 
     # Fail fast: before any container or model is created.
     # Never print the key value, not even a prefix.
-    api_key = os.environ.get(API_KEY_ENV)
+    api_key_env = {
+        "deepseek": API_KEY_ENV,
+        "gemini": GEMINI_API_KEY_ENV,
+    }[args.provider]
+
+    api_key = os.environ.get(api_key_env)
     if not api_key:
-        raise SystemExit(f"{API_KEY_ENV} is not set or empty; aborting before any work.")
+        raise SystemExit(f"{api_key_env} is not set or empty")
+
+    registry = ToolRegistry([BashTool()])
+    billing = DeepSeekBilling(api_key=api_key)
+
+    if not billing.is_available():
+        raise SystemExit("DeepSeek account has no available balance.")
 
     task = Task(
         task_id=args.task_id,
@@ -135,11 +160,26 @@ def main(argv: list[str] | None = None) -> None:
     # Single source of truth for tools: the model sees exactly what the agent can run.
     registry = ToolRegistry([BashTool()])
 
-    model = DeepSeekModel(
-        api_key=api_key,
-        tool_specs=registry.specs(),
-        model=args.model,
-    )
+    if args.model is None:
+        args.model = (
+            "gemini-3.8-flash" if args.provider == "gemini" else "deepseek-flash"
+        )
+
+    if args.provider == "gemini":
+        model = GeminiModel(
+            api_key=api_key,
+            tool_specs=registry.specs(),
+            model=args.model,
+        )
+        budget = None
+    else:
+        model = DeepSeekModel(
+            api_key=api_key,
+            tool_specs=registry.specs(),
+            model=args.model,
+        )
+        budget = args.budget
+
     runtime = DockerRuntime(
         workspace=Path(args.workspace),
         image=args.image,
@@ -151,7 +191,7 @@ def main(argv: list[str] | None = None) -> None:
         registry=registry,
         runtime=runtime,
         max_steps=args.max_steps,
-        budget=args.budget,
+        budget=budget,
         trajectory_path=args.trajectory_path,
     )
 
@@ -165,7 +205,6 @@ def main(argv: list[str] | None = None) -> None:
             }
         )
     )
-
 
 if __name__ == "__main__":
     main()

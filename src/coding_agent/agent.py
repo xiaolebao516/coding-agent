@@ -26,11 +26,19 @@ def _merge_usage(total: Usage, current: Usage) -> Usage:
     )
 
 
-def _budget_stop_reason(usage: Usage, budget: float) -> StopReason | None:
+def _budget_stop_reason(
+    usage: Usage,
+    budget: float | None,
+) -> StopReason | None:
+    if budget is None:
+        return None
+
     if usage.cost_usd is None:
         return StopReason.BUDGET_UNKNOWN
+
     if usage.cost_usd >= budget:
         return StopReason.BUDGET_EXHAUSTED
+
     return None
 
 
@@ -40,7 +48,7 @@ class Agent:
         model: Model,
         tool_registry: ToolRegistry,
         max_steps: int,
-        budget: float,
+        budget: float | None,
     ):
         self.model = model
         self.tool_registry = tool_registry
