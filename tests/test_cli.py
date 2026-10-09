@@ -217,3 +217,49 @@ def test_main_rejects_unavailable_balance(monkeypatch, tmp_path):
                 str(tmp_path),
             ]
         )
+
+
+
+def test_gemini_cli_skips_deepseek_billing_and_uses_default_model(monkeypatch, tmp_path):
+    monkeypatch.setenv(cli.GEMINI_API_KEY_ENV, "gemini-test-key")
+    monkeypatch.delenv(API_KEY_ENV, raising=False)
+    monkeypatch.setattr(cli, "DeepSeekBilling", _forbid("DeepSeekBilling"))
+    captured = {}
+
+    def fake_gemini_model(**kwargs):
+        captured.update(kwargs)
+        model = FakeModel([
+            ModelResponse(content="done", tool_call=None, usage=Usage(input_tokens=5))
+        ])
+        model.provider = "gemini"
+        model.model = kwargs["model"]
+        return model
+
+    monkeypatch.setattr(cli, "GeminiModel", fake_gemini_model)
+    monkeypatch.setattr(cli, "DockerRuntime", lambda **kwargs: LifecycleFakeRuntime())
+
+    path = tmp_path / "gemini-trajectory.json"
+    main([
+        "--provider", "gemini", "--task-id", "gemini-smoke",
+        "--problem", "say hi", "--workspace", str(tmp_path),
+        "--max-steps", "2", "--max-output-tokens", "128",
+        "--trajectory-path", str(path),
+    ])
+    assert captured["model"] == "gemini-3.8-flash"
+    assert captured["max_output_tokens"] == 128
+    assert captured["api_key"] == "gemini-test-key"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["provider"] == "gemini"
+    assert data["budget"] is None
+    assert "gemini-test-key" not in path.read_text(encoding="utf-8")
+
+
+def test_gemini_cli_missing_key_aborts_before_docker(monkeypatch, tmp_path):
+    monkeypatch.delenv(cli.GEMINI_API_KEY_ENV, raising=False)
+    monkeypatch.setattr(cli, "DockerRuntime", _forbid("DockerRuntime"))
+    monkeypatch.setattr(cli, "DeepSeekBilling", _forbid("DeepSeekBilling"))
+    with pytest.raises(SystemExit, match="GEMINI_API_KEY"):
+        main([
+            "--provider", "gemini", "--task-id", "t",
+            "--problem", "p", "--workspace", str(tmp_path),
+        ])
