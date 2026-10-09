@@ -2,7 +2,7 @@ import json
 from typing import Any
 from urllib.request import Request, urlopen
 
-from coding_agent.contracts import ModelResponse, ToolCall, Usage
+from coding_agent.contracts import ModelFinishReason, ModelResponse, ToolCall, Usage
 from coding_agent.tools.base import ToolSpec
 
 DEFAULT_BASE_URL = "https://api.deepseek.com"
@@ -178,7 +178,20 @@ def usage_from_deepseek(raw_usage: dict[str, Any] | None, model: str) -> Usage:
     return usage
 
 def parse_deepseek_response(raw: dict[str, Any], model: str) -> ModelResponse:
-    message = raw["choices"][0]["message"]
+    choice = raw["choices"][0]
+    message = choice.get("message") or {}
+    usage = usage_from_deepseek(raw.get("usage"), model)
+
+    # The model may have returned incomplete JSON in a tool call.
+    # Detect truncation BEFORE parsing any tool arguments.
+    if choice.get("finish_reason") == "length":
+        return ModelResponse(
+            content=message.get("content"),
+            tool_call=None,
+            usage=usage,
+            finish_reason=ModelFinishReason.OUTPUT_TRUNCATED,
+        )
+
     tool_calls = message.get("tool_calls") or []
 
     if len(tool_calls) > 1:
@@ -196,7 +209,7 @@ def parse_deepseek_response(raw: dict[str, Any], model: str) -> ModelResponse:
     return ModelResponse(
         content=message.get("content"),
         tool_call=tool_call,
-        usage=usage_from_deepseek(raw.get("usage"), model),
+        usage=usage,
     )
 
 
