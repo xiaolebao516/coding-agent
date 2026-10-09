@@ -2,7 +2,7 @@ import json
 from typing import Any
 from urllib.request import Request, urlopen
 
-from coding_agent.contracts import ModelResponse, ToolCall, Usage
+from coding_agent.contracts import ModelFinishReason, ModelResponse, ToolCall, Usage
 from coding_agent.tools.base import ToolSpec
 
 
@@ -113,9 +113,40 @@ class GeminiModel:
         }
 
         raw = self._post(payload)
+
+        # Preserve token usage even when the provider has hit its output limit.
+        usage_metadata = raw.get("usageMetadata") or {}
+        usage = Usage(
+            input_tokens=usage_metadata.get("promptTokenCount"),
+            output_tokens=(
+                usage_metadata["candidatesTokenCount"]
+                + usage_metadata.get("thoughtsTokenCount", 0)
+                if "candidatesTokenCount" in usage_metadata
+                else None
+            ),
+            cost_usd=None,
+        )
+
         candidate = raw["candidates"][0]
-        original = candidate["content"]
+        original = candidate.get("content") or {}
         parts = original.get("parts", [])
+        content = (
+            "\n".join(
+                part["text"]
+                for part in parts
+                if "text" in part and not part.get("thought", False)
+            )
+            or None
+        )
+
+        # A truncated tool call may lack id/args; it must never execute.
+        if candidate.get("finishReason") == "MAX_TOKENS":
+            return ModelResponse(
+                content=content,
+                tool_call=None,
+                usage=usage,
+                finish_reason=ModelFinishReason.OUTPUT_TRUNCATED,
+            )
 
         calls = [part["functionCall"] for part in parts if "functionCall" in part]
 
@@ -128,7 +159,7 @@ class GeminiModel:
             call = calls[0]
             call_id = call["id"]
 
-            # 必须保存整个原始 Content，不能丢 thoughtSignature
+            # Preserve the raw Content (including the thoughtSignature).
             self._pending_calls[call_id] = original
 
             tool_call = ToolCall(
@@ -137,29 +168,10 @@ class GeminiModel:
                 arguments=call["args"],
             )
 
-        content = (
-            "\n".join(
-                part["text"]
-                for part in parts
-                if "text" in part and not part.get("thought", False)
-            )
-            or None
-        )
-
-        usage = raw.get("usageMetadata") or {}
-
         return ModelResponse(
             content=content,
             tool_call=tool_call,
-            usage=Usage(
-                input_tokens=usage.get("promptTokenCount"),
-                output_tokens=(
-                    usage["candidatesTokenCount"] + usage.get("thoughtsTokenCount", 0)
-                    if "candidatesTokenCount" in usage
-                    else None
-                ),
-                cost_usd=None,
-            ),
+            usage=usage,
         )
 
     def _post(self, payload: dict) -> dict:
