@@ -16,10 +16,14 @@ class GeminiModel:
         tool_specs: list[ToolSpec],
         model: str = "gemini-3.8-flash",
         timeout: float = 60.0,
+        max_output_tokens: int = 512,
     ):
         self._api_key = api_key
         self.model = model
         self.timeout = timeout
+        if max_output_tokens <= 0:
+            raise ValueError("max_output_tokens must be positive")
+        self.max_output_tokens = max_output_tokens
 
         self._tools = [
             {
@@ -103,7 +107,7 @@ class GeminiModel:
             "contents": self._messages(history),
             "tools": [{"functionDeclarations": self._tools}],
             "generationConfig": {
-                "maxOutputTokens": 512,
+                "maxOutputTokens": self.max_output_tokens,
                 "thinkingConfig": {"thinkingLevel": "low"},
             },
         }
@@ -142,7 +146,7 @@ class GeminiModel:
             or None
         )
 
-        usage = raw.get("usageMetadata", {})
+        usage = raw.get("usageMetadata") or {}
 
         return ModelResponse(
             content=content,
@@ -150,8 +154,9 @@ class GeminiModel:
             usage=Usage(
                 input_tokens=usage.get("promptTokenCount"),
                 output_tokens=(
-                    usage.get("candidatesTokenCount", 0)
-                    + usage.get("thoughtsTokenCount", 0)
+                    usage["candidatesTokenCount"] + usage.get("thoughtsTokenCount", 0)
+                    if "candidatesTokenCount" in usage
+                    else None
                 ),
                 cost_usd=None,
             ),
