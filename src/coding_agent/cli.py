@@ -112,7 +112,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--model",
-        default="None",
+        default=None,
         help="Model name.",
     )
 
@@ -146,12 +146,6 @@ def main(argv: list[str] | None = None) -> None:
     if not api_key:
         raise SystemExit(f"{api_key_env} is not set or empty")
 
-    registry = ToolRegistry([BashTool()])
-    billing = DeepSeekBilling(api_key=api_key)
-
-    if not billing.is_available():
-        raise SystemExit("DeepSeek account has no available balance.")
-
     task = Task(
         task_id=args.task_id,
         problem_statement=args.problem,
@@ -170,9 +164,15 @@ def main(argv: list[str] | None = None) -> None:
             api_key=api_key,
             tool_specs=registry.specs(),
             model=args.model,
+            max_output_tokens=args.max_output_tokens or 512,
         )
         budget = None
     else:
+        if args.max_output_tokens is not None:
+            raise SystemExit("--max-output-tokens is currently only supported by gemini")
+        billing = DeepSeekBilling(api_key=api_key)
+        if not billing.is_available():
+            raise SystemExit("DeepSeek account has no available balance.")
         model = DeepSeekModel(
             api_key=api_key,
             tool_specs=registry.specs(),
