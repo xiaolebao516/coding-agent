@@ -49,11 +49,15 @@ class Agent:
         tool_registry: ToolRegistry,
         max_steps: int,
         budget: float | None,
+        max_total_tokens: int | None = None,
     ):
         self.model = model
         self.tool_registry = tool_registry
         self.max_steps = max_steps
         self.budget = budget
+        if max_total_tokens is not None and max_total_tokens <= 0:
+            raise ValueError("max_total_tokens must be positive")
+        self.max_total_tokens = max_total_tokens
 
     def run(
         self, task: Task, runtime: Runtime, recorder: TrajectoryRecorder
@@ -64,6 +68,7 @@ class Agent:
             model=self.model.model,
             max_steps=self.max_steps,
             budget=self.budget,
+            max_total_tokens=self.max_total_tokens,
         )
         steps = 0
         total_usage = Usage(
