@@ -9,6 +9,8 @@ def test_trajectory_recorder_happy_path():
 
     recorder.start(
         task_id="task-1",
+        provider="fake",
+        model="fake",
         max_steps=5,
         budget=1.0,
     )
@@ -92,6 +94,8 @@ def test_start_twice_raises():
 
     recorder.start(
         task_id="task-1",
+        provider="fake",
+        model="fake",
         max_steps=5,
         budget=1.0,
     )
@@ -99,6 +103,8 @@ def test_start_twice_raises():
     with pytest.raises(RuntimeError):
         recorder.start(
             task_id="task-2",
+            provider="fake",
+            model="fake",
             max_steps=5,
             budget=1.0,
         )
@@ -109,6 +115,8 @@ def test_finished_recorder_rejects_operations():
 
     recorder.start(
         task_id="task-1",
+        provider="fake",
+        model="fake",
         max_steps=5,
         budget=1.0,
     )

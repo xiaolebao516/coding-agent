@@ -206,6 +206,8 @@ def parse_deepseek_response(raw: dict[str, Any], model: str) -> ModelResponse:
 
 
 class DeepSeekModel:
+    provider = "deepseek"
+
     def __init__(
         self,
         *,

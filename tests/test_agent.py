@@ -400,6 +400,9 @@ def test_agent_feeds_command_failure_back_to_model():
     assert tool_message["error"] is None
 
 class FailingModel:
+    provider = "fake"
+    model = "fake"
+
     def generate(self):
         raise RuntimeError("model down")
 

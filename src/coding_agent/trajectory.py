@@ -24,6 +24,9 @@ class Trajectory:
     task_id: str
     started_at: str
 
+    provider: str
+    model: str
+
     max_steps: int
     budget: float | None
 
@@ -57,6 +60,8 @@ class TrajectoryRecorder:
     def start(
         self,
         task_id: str,
+        provider: str,
+        model: str,
         max_steps: int,
         budget: float | None,
     ) -> None:
@@ -66,6 +71,8 @@ class TrajectoryRecorder:
             self.trajectory = Trajectory(run_id=str(uuid4()),
                                          started_at=started_at,
                                          task_id=task_id,
+                                         provider=provider,
+                                         model=model,
                                          max_steps=max_steps,
                                          budget = budget,
                                         )

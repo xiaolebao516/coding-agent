@@ -50,7 +50,13 @@ class Agent:
     def run(
         self, task: Task, runtime: Runtime, recorder: TrajectoryRecorder
     ) -> AgentResult:
-        recorder.start(task.task_id, self.max_steps, self.budget)
+        recorder.start(
+            task_id=task.task_id,
+            provider=self.model.provider,
+            model=self.model.model,
+            max_steps=self.max_steps,
+            budget=self.budget,
+        )
         steps = 0
         total_usage = Usage(
             input_tokens=0, cache_read_tokens=0, output_tokens=0, cost_usd=0.0
