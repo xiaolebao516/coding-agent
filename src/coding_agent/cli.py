@@ -161,6 +161,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--thinking-level",
+        choices=["low", "medium", "high"],
+        default=None,
+        help="Gemini reasoning level; defaults to low for backward compatibility.",
+    )
+
+    parser.add_argument(
         "--max-output-tokens",
         type=int,
         default=None,
@@ -185,6 +192,8 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit("--max-total-tokens must be positive")
     if args.provider == "gemini" and args.budget is not None:
         raise SystemExit("--budget is a USD limit and is not supported by Gemini; use --max-total-tokens")
+    if args.provider != "gemini" and args.thinking_level is not None:
+        raise SystemExit("--thinking-level is only supported by Gemini")
 
     # Fail fast: before any container or model is created.
     # Never print the key value, not even a prefix.
@@ -232,6 +241,7 @@ def main(argv: list[str] | None = None) -> None:
             max_output_tokens=(
                 args.max_output_tokens if args.max_output_tokens is not None else 512
             ),
+            thinking_level=args.thinking_level or "low",
         )
         budget = None
         max_total_tokens = (

@@ -263,3 +263,42 @@ def test_gemini_cli_missing_key_aborts_before_docker(monkeypatch, tmp_path):
             "--provider", "gemini", "--task-id", "t",
             "--problem", "p", "--workspace", str(tmp_path),
         ])
+
+
+def test_cli_gemini_thinking_level_and_first_run_limits(monkeypatch, tmp_path):
+    monkeypatch.setenv(cli.GEMINI_API_KEY_ENV, "test-key")
+    captured = {}
+
+    def fake_gemini_model(**kwargs):
+        captured.update(kwargs)
+        model = FakeModel([
+            ModelResponse(content="done", tool_call=None,
+                          usage=Usage(input_tokens=15, output_tokens=10))
+        ])
+        model.provider = "gemini"
+        model.model = kwargs["model"]
+        return model
+
+    monkeypatch.setattr(cli, "GeminiModel", fake_gemini_model)
+    monkeypatch.setattr(cli, "DockerRuntime", lambda **kwargs: LifecycleFakeRuntime())
+    trajectory_path = tmp_path / "first-run.json"
+    cli.main([
+        "--provider", "gemini", "--task-id", "first-run",
+        "--problem", "Fix a test failure", "--workspace", str(tmp_path),
+        "--model", "gemini-3.8-flash", "--thinking-level", "medium",
+        "--max-steps", "10", "--max-output-tokens", "8192",
+        "--max-total-tokens", "60000", "--trajectory-path", str(trajectory_path),
+    ])
+    assert captured["thinking_level"] == "medium"
+    assert captured["max_output_tokens"] == 8192
+    trajectory = json.loads(trajectory_path.read_text(encoding="utf-8"))
+    assert trajectory["max_steps"] == 10
+    assert trajectory["max_total_tokens"] == 60000
+
+
+def test_cli_rejects_thinking_level_for_deepseek_before_external_work(monkeypatch, tmp_path):
+    monkeypatch.setenv(cli.API_KEY_ENV, "test-key")
+    monkeypatch.setattr(cli, "DockerRuntime", _forbid("DockerRuntime"))
+    with pytest.raises(SystemExit, match="only supported by Gemini"):
+        cli.main(["--task-id", "t", "--problem", "p", "--workspace", str(tmp_path),
+                  "--thinking-level", "medium"])

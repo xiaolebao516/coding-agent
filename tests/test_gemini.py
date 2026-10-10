@@ -152,3 +152,23 @@ def test_http_error_does_not_retry_or_bypass_next_request_slot(monkeypatch):
     model._post({"contents": []})
     assert starts == [200.0, 215.0]
     assert sleeps == [12.0]
+
+
+def test_thinking_level_can_be_set_for_coding_task(monkeypatch):
+    model = GeminiModel(
+        api_key="fake", tool_specs=[],
+        max_output_tokens=8192, thinking_level="medium",
+    )
+    sent = []
+    monkeypatch.setattr(model, "_post", lambda payload: (
+        sent.append(payload) or {
+            "candidates": [{"content": {"parts": [{"text": "done"}]}}]
+        }
+    ))
+    model.generate([{"role": "user", "content": "Fix a repository issue"}])
+    config = sent[0]["generationConfig"]
+    assert config["thinkingConfig"]["thinkingLevel"] == "medium"
+    assert config["maxOutputTokens"] == 8192
+    assert GeminiModel(api_key="fake", tool_specs=[]).thinking_level == "low"
+    with pytest.raises(ValueError, match="thinking_level"):
+        GeminiModel(api_key="fake", tool_specs=[], thinking_level="minimal")

@@ -37,6 +37,7 @@ class GeminiModel:
         model: str = "gemini-3.8-flash",
         timeout: float = 60.0,
         max_output_tokens: int = 512,
+        thinking_level: str = "low",
     ):
         self._api_key = api_key
         self.model = model
@@ -44,6 +45,9 @@ class GeminiModel:
         if max_output_tokens <= 0:
             raise ValueError("max_output_tokens must be positive")
         self.max_output_tokens = max_output_tokens
+        if thinking_level not in ("low", "medium", "high"):
+            raise ValueError("thinking_level must be low, medium, or high")
+        self.thinking_level = thinking_level
         self._last_request_started_at: float | None = None
 
         self._tools = [
@@ -129,7 +133,7 @@ class GeminiModel:
             "tools": [{"functionDeclarations": self._tools}],
             "generationConfig": {
                 "maxOutputTokens": self.max_output_tokens,
-                "thinkingConfig": {"thinkingLevel": "low"},
+                "thinkingConfig": {"thinkingLevel": self.thinking_level},
             },
         }
 
