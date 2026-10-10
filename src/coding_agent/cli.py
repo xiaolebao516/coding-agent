@@ -6,6 +6,7 @@ from coding_agent.agent import Agent
 from coding_agent.contracts import Task
 from coding_agent.deepseek import DeepSeekModel
 from coding_agent.gemini import GeminiModel
+from coding_agent.openrouter import DEFAULT_MODEL as OPENROUTER_DEFAULT_MODEL, OpenRouterModel
 from coding_agent.model import Model
 from coding_agent.runtime.base import Runtime
 from coding_agent.runtime.docker import DockerRuntime
@@ -20,6 +21,7 @@ from coding_agent.workspace import (
 
 API_KEY_ENV = "DEEPSEEK_API_KEY"
 GEMINI_API_KEY_ENV = "GEMINI_API_KEY"
+OPENROUTER_API_KEY_ENV = "OPENROUTER_API_KEY"
 
 def run_once(
     task: Task,
@@ -110,7 +112,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--provider",
-        choices=["deepseek", "gemini"],
+        choices=["deepseek", "gemini", "openrouter"],
         default="deepseek",
     )
 
@@ -197,8 +199,8 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.max_total_tokens is not None and args.max_total_tokens <= 0:
         raise SystemExit("--max-total-tokens must be positive")
-    if args.provider == "gemini" and args.budget is not None:
-        raise SystemExit("--budget is a USD limit and is not supported by Gemini; use --max-total-tokens")
+    if args.provider in ("gemini", "openrouter") and args.budget is not None:
+        raise SystemExit("--budget is unavailable for this provider; use --max-total-tokens")
     if args.provider != "gemini" and args.thinking_level is not None:
         raise SystemExit("--thinking-level is only supported by Gemini")
     if args.model_timeout_seconds is not None:
@@ -212,6 +214,7 @@ def main(argv: list[str] | None = None) -> None:
     api_key_env = {
         "deepseek": API_KEY_ENV,
         "gemini": GEMINI_API_KEY_ENV,
+        "openrouter": OPENROUTER_API_KEY_ENV,
     }[args.provider]
 
     api_key = os.environ.get(api_key_env)
@@ -241,9 +244,11 @@ def main(argv: list[str] | None = None) -> None:
         patch_exclude_paths = (PYTEST_VERSION_FILE,)
 
     if args.model is None:
-        args.model = (
-            "gemini-3.8-flash" if args.provider == "gemini" else "deepseek-flash"
-        )
+        args.model = {
+            "gemini": "gemini-3.8-flash",
+            "deepseek": "deepseek-flash",
+            "openrouter": OPENROUTER_DEFAULT_MODEL,
+        }[args.provider]
 
     if args.provider == "gemini":
         model = GeminiModel(
@@ -260,6 +265,15 @@ def main(argv: list[str] | None = None) -> None:
         max_total_tokens = (
             args.max_total_tokens if args.max_total_tokens is not None else 20_000
         )
+    elif args.provider == "openrouter":
+        model = OpenRouterModel(
+            api_key=api_key,
+            tool_specs=registry.specs(),
+            model=args.model,
+            max_output_tokens=(args.max_output_tokens if args.max_output_tokens is not None else 8192),
+        )
+        budget = None
+        max_total_tokens = args.max_total_tokens if args.max_total_tokens is not None else 60_000
     else:
         billing = DeepSeekBilling(api_key=api_key)
         if not billing.is_available():
