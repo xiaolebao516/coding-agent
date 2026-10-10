@@ -105,7 +105,8 @@ class Agent:
                                 else None
                             ),
                             "usage": response.usage,
-                            "finish_reason": response.finish_reason.value
+                            "finish_reason": response.finish_reason.value,
+                            "stop_detail": response.stop_detail,
                         },
                     )
                 )
@@ -127,6 +128,16 @@ class Agent:
             if response.finish_reason == ModelFinishReason.OUTPUT_TRUNCATED:
                 result = AgentResult(
                     StopReason.OUTPUT_TRUNCATED,
+                    final_message=None,
+                    steps=steps,
+                    usage=total_usage,
+                )
+                break
+            # A provider rejection/invalid response is not a successful final answer.
+            # The adapter has already preserved any billed token usage.
+            if response.finish_reason == ModelFinishReason.PROVIDER_STOPPED:
+                result = AgentResult(
+                    StopReason.PROVIDER_STOPPED,
                     final_message=None,
                     steps=steps,
                     usage=total_usage,

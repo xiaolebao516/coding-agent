@@ -127,7 +127,19 @@ class GeminiModel:
             cost_usd=None,
         )
 
-        candidate = raw["candidates"][0]
+        candidates = raw.get("candidates") or []
+        if not candidates:
+            prompt_feedback = raw.get("promptFeedback") or {}
+            detail = prompt_feedback.get("blockReason") or "missing_candidates"
+            return ModelResponse(
+                content=None,
+                tool_call=None,
+                usage=usage,
+                finish_reason=ModelFinishReason.PROVIDER_STOPPED,
+                stop_detail=f"gemini:{detail}",
+            )
+
+        candidate = candidates[0]
         original = candidate.get("content") or {}
         parts = original.get("parts", [])
         content = (
@@ -146,17 +158,45 @@ class GeminiModel:
                 tool_call=None,
                 usage=usage,
                 finish_reason=ModelFinishReason.OUTPUT_TRUNCATED,
+                stop_detail="gemini:MAX_TOKENS",
+            )
+
+        reason = candidate.get("finishReason")
+        if reason not in (None, "STOP"):
+            return ModelResponse(
+                content=content,
+                tool_call=None,
+                usage=usage,
+                finish_reason=ModelFinishReason.PROVIDER_STOPPED,
+                stop_detail=f"gemini:{reason}",
             )
 
         calls = [part["functionCall"] for part in parts if "functionCall" in part]
 
         if len(calls) > 1:
-            raise ValueError("parallel tool calls not supported")
+            return ModelResponse(
+                content=content,
+                tool_call=None,
+                usage=usage,
+                finish_reason=ModelFinishReason.PROVIDER_STOPPED,
+                stop_detail="gemini:unsupported_tool_calls",
+            )
 
         tool_call = None
 
         if calls:
             call = calls[0]
+            if (not isinstance(call, dict)
+                    or not call.get("id")
+                    or not call.get("name")
+                    or not isinstance(call.get("args"), dict)):
+                return ModelResponse(
+                    content=content,
+                    tool_call=None,
+                    usage=usage,
+                    finish_reason=ModelFinishReason.PROVIDER_STOPPED,
+                    stop_detail="gemini:invalid_tool_call",
+                )
             call_id = call["id"]
 
             # Preserve the raw Content (including the thoughtSignature).
