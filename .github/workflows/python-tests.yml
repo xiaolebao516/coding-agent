@@ -3,7 +3,7 @@ name: Python tests
 on:
   push:
     branches:
-      - "fix/m2-run-token-limit"
+      - "wip/m2-g2-model"
   pull_request:
     branches:
       - main
