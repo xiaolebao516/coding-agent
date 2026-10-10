@@ -13,6 +13,10 @@ from coding_agent.tools.bash import BashTool
 from coding_agent.tools.registry import ToolRegistry
 from coding_agent.trajectory import TrajectoryRecorder
 from coding_agent.deepseek_billing import DeepSeekBilling
+from coding_agent.workspace import (
+    export_patch, prepare_workspace, validate_artifact_paths, write_predictions,
+    restore_pytest_version, PYTEST_VERSION_FILE,
+)
 
 API_KEY_ENV = "DEEPSEEK_API_KEY"
 GEMINI_API_KEY_ENV = "GEMINI_API_KEY"
@@ -26,7 +30,17 @@ def run_once(
     budget: float | None,
     trajectory_path: str,
     max_total_tokens: int | None = None,
+    patch_workspace: Path | None = None,
+    base_commit: str | None = None,
+    patch_path: Path | None = None,
+    predictions_path: Path | None = None,
+    patch_exclude_paths: tuple[str, ...] = (),
 ):
+    artifacts = (patch_workspace, base_commit, patch_path, predictions_path)
+    if any(value is not None for value in artifacts):
+        if not all(value is not None for value in artifacts):
+            raise ValueError("patch export requires workspace, base commit, patch and predictions paths")
+        validate_artifact_paths(patch_workspace, Path(trajectory_path), patch_path, predictions_path)
     agent = Agent(
         model=model,
         tool_registry=registry,
@@ -47,6 +61,13 @@ def run_once(
         )
 
         trajectory = recorder.trajectory
+
+        if patch_workspace is not None:
+            patch = export_patch(patch_workspace, base_commit, patch_exclude_paths)
+            patch_path.write_text(patch, encoding="utf-8")
+            write_predictions(predictions_path, task.task_id, f"{model.provider}/{model.model}", patch)
+            assert trajectory is not None
+            trajectory.patch_pointer = str(patch_path.resolve())
 
         # 保存 trajectory JSON
         with open(trajectory_path, "w", encoding="utf-8") as f:
@@ -76,9 +97,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--problem",
-        required=True,
         help="Problem statement for the agent.",
     )
+    parser.add_argument("--problem-file", type=Path, help="UTF-8 public problem statement file.")
 
     parser.add_argument(
         "--max-steps",
@@ -111,6 +132,14 @@ def build_parser() -> argparse.ArgumentParser:
         default="python:3.12-slim",
         help="Docker image for the task container.",
     )
+    parser.add_argument("--container-workdir", default="/workspace")
+    parser.add_argument("--container-python-env", help="Python environment prefix applied inside bash -lc.")
+    parser.add_argument("--match-workspace-owner", action="store_true")
+    parser.add_argument("--restore-pytest-version", action="store_true", help="Reuse the pinned image's pytest build artifact.")
+    parser.add_argument("--base-commit", help="Enable isolated Git checkout and patch export.")
+    parser.add_argument("--task-workspace", type=Path, help="New isolated checkout directory.")
+    parser.add_argument("--patch-path", type=Path)
+    parser.add_argument("--predictions-path", type=Path)
 
     parser.add_argument(
         "--model",
@@ -144,6 +173,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
 
+    if (args.problem is None) == (args.problem_file is None):
+        raise SystemExit("provide exactly one of --problem or --problem-file")
+    export_args = (args.base_commit, args.task_workspace, args.patch_path, args.predictions_path)
+    if any(value is not None for value in export_args) and not all(value is not None for value in export_args):
+        raise SystemExit("provide --base-commit, --task-workspace, --patch-path and --predictions-path together")
+    if args.restore_pytest_version and args.base_commit is None:
+        raise SystemExit("--restore-pytest-version requires an isolated --base-commit workspace")
+
     if args.max_total_tokens is not None and args.max_total_tokens <= 0:
         raise SystemExit("--max-total-tokens must be positive")
     if args.provider == "gemini" and args.budget is not None:
@@ -162,11 +199,25 @@ def main(argv: list[str] | None = None) -> None:
 
     task = Task(
         task_id=args.task_id,
-        problem_statement=args.problem,
+        problem_statement=args.problem if args.problem is not None else args.problem_file.read_text(encoding="utf-8"),
     )
 
     # Single source of truth for tools: the model sees exactly what the agent can run.
     registry = ToolRegistry([BashTool()])
+
+    workspace = Path(args.workspace)
+    base_commit = None
+    if args.base_commit is not None:
+        validate_artifact_paths(
+            args.task_workspace, Path(args.trajectory_path), args.patch_path, args.predictions_path,
+        )
+        base_commit = prepare_workspace(workspace, args.task_workspace, args.base_commit)
+        workspace = args.task_workspace
+
+    patch_exclude_paths = ()
+    if args.restore_pytest_version:
+        restore_pytest_version(workspace, args.image)
+        patch_exclude_paths = (PYTEST_VERSION_FILE,)
 
     if args.model is None:
         args.model = (
@@ -200,8 +251,11 @@ def main(argv: list[str] | None = None) -> None:
         max_total_tokens = args.max_total_tokens
 
     runtime = DockerRuntime(
-        workspace=Path(args.workspace),
+        workspace=workspace,
         image=args.image,
+        container_workdir=args.container_workdir,
+        container_python_env=args.container_python_env,
+        match_workspace_owner=args.match_workspace_owner,
     )
 
     result = run_once(
@@ -213,6 +267,11 @@ def main(argv: list[str] | None = None) -> None:
         budget=budget,
         trajectory_path=args.trajectory_path,
         max_total_tokens=max_total_tokens,
+        patch_workspace=workspace if base_commit is not None else None,
+        base_commit=base_commit,
+        patch_path=args.patch_path,
+        predictions_path=args.predictions_path,
+        patch_exclude_paths=patch_exclude_paths,
     )
 
     print(
