@@ -1,5 +1,7 @@
 """Safe live two-turn Groq function-calling smoke (never executes model code)."""
+import json
 import os
+from urllib.error import HTTPError
 
 from coding_agent.contracts import ModelFinishReason
 from coding_agent.groq import GroqModel
@@ -7,6 +9,34 @@ from coding_agent.tools.bash import BashTool
 from coding_agent.tools.registry import ToolRegistry
 
 MARKER = "groq_tool_ok"
+
+
+def _generate_with_diagnostics(model: GroqModel, history: list[dict], key: str):
+    """Report safe Groq HTTP error details; never dump HTML or credentials."""
+    try:
+        return model.generate(history)
+    except HTTPError as exc:
+        body = exc.read(4096)
+        try:
+            data = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            data = None
+        if isinstance(data, dict) and isinstance(data.get("error"), dict):
+            error = data["error"]
+            parts = []
+            for field in ("type", "code", "message"):
+                value = error.get(field)
+                if isinstance(value, str) and value:
+                    value = value.replace(key, "[REDACTED]")
+                    parts.append(f"{field}={value[:400]}")
+            detail = "; ".join(parts) if parts else "error JSON has no public fields"
+        else:
+            detail = (
+                "non-JSON response"
+                f"; content-type={exc.headers.get('Content-Type', 'unknown')}"
+                f"; server={exc.headers.get('Server', 'unknown')}"
+            )
+        raise SystemExit(f"FAIL: Groq HTTP {exc.code}: {detail}") from None
 
 
 def main() -> None:
@@ -26,7 +56,7 @@ def main() -> None:
             "Then report the tool's output verbatim."
         ),
     }]
-    first = model.generate(history)
+    first = _generate_with_diagnostics(model, history, key)
     call = first.tool_call
     if first.finish_reason != ModelFinishReason.FINISHED or call is None:
         raise SystemExit("FAIL: Groq did not emit a valid tool call")
@@ -39,7 +69,7 @@ def main() -> None:
         {"role": "tool", "tool_call_id": call.id, "return_code": 0,
          "stdout": MARKER, "stderr": "", "timed_out": False, "error": None},
     ])
-    second = model.generate(history)
+    second = _generate_with_diagnostics(model, history, key)
     if (
         second.finish_reason != ModelFinishReason.FINISHED
         or second.tool_call is not None

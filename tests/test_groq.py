@@ -204,3 +204,55 @@ def test_safe_smoke_rejects_unexpected_command(monkeypatch):
     monkeypatch.setattr(groq_smoke,"GroqModel",FakeModel)
     with pytest.raises(SystemExit,match="unexpected tool"):
         groq_smoke.main()
+
+
+
+def test_smoke_displays_structured_403_reason_without_leaking_key(monkeypatch):
+    from urllib.error import HTTPError
+
+    class RejectingModel:
+        def __init__(self, **kwargs): pass
+        def generate(self, history):
+            body = json.dumps({"error": {
+                "type": "permissions_error",
+                "code": "model_permission_blocked_project",
+                "message": "Access denied for fake-secret",
+            }}).encode()
+            raise HTTPError(
+                "https://api.groq.com/openai/v1/chat/completions",
+                403, "Forbidden",
+                {"Content-Type": "application/json"},
+                io.BytesIO(body),
+            )
+
+    monkeypatch.setenv("GROQ_API_KEY", "fake-secret")
+    monkeypatch.setattr(groq_smoke, "GroqModel", RejectingModel)
+    with pytest.raises(SystemExit) as ex:
+        groq_smoke.main()
+    value = str(ex.value)
+    assert "Groq HTTP 403" in value
+    assert "model_permission_blocked_project" in value
+    assert "fake-secret" not in value
+    assert "[REDACTED]" in value
+
+
+def test_smoke_html_403_does_not_dump_response_body(monkeypatch):
+    from urllib.error import HTTPError
+
+    class RejectingModel:
+        def __init__(self, **kwargs): pass
+        def generate(self, history):
+            raise HTTPError(
+                "https://api.groq.com/openai/v1/chat/completions",
+                403, "Forbidden",
+                {"Content-Type": "text/html", "Server": "cloudflare"},
+                io.BytesIO(b"<html>secret diagnostic page</html>"),
+            )
+
+    monkeypatch.setenv("GROQ_API_KEY", "fake")
+    monkeypatch.setattr(groq_smoke, "GroqModel", RejectingModel)
+    with pytest.raises(SystemExit) as ex:
+        groq_smoke.main()
+    assert "non-JSON response" in str(ex.value)
+    assert "server=cloudflare" in str(ex.value)
+    assert "secret diagnostic page" not in str(ex.value)
