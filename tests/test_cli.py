@@ -287,10 +287,12 @@ def test_cli_gemini_thinking_level_and_first_run_limits(monkeypatch, tmp_path):
         "--problem", "Fix a test failure", "--workspace", str(tmp_path),
         "--model", "gemini-3.8-flash", "--thinking-level", "medium",
         "--max-steps", "10", "--max-output-tokens", "8192",
-        "--max-total-tokens", "60000", "--trajectory-path", str(trajectory_path),
+        "--max-total-tokens", "60000", "--model-timeout-seconds", "180",
+        "--trajectory-path", str(trajectory_path),
     ])
     assert captured["thinking_level"] == "medium"
     assert captured["max_output_tokens"] == 8192
+    assert captured["timeout"] == 180
     trajectory = json.loads(trajectory_path.read_text(encoding="utf-8"))
     assert trajectory["max_steps"] == 10
     assert trajectory["max_total_tokens"] == 60000
@@ -302,3 +304,13 @@ def test_cli_rejects_thinking_level_for_deepseek_before_external_work(monkeypatc
     with pytest.raises(SystemExit, match="only supported by Gemini"):
         cli.main(["--task-id", "t", "--problem", "p", "--workspace", str(tmp_path),
                   "--thinking-level", "medium"])
+
+
+def test_cli_rejects_invalid_gemini_request_timeout_before_network(monkeypatch, tmp_path):
+    monkeypatch.setenv(cli.GEMINI_API_KEY_ENV, "fake-key")
+    monkeypatch.setattr(cli, "GeminiModel", _forbid("GeminiModel"))
+    with pytest.raises(SystemExit, match="must be positive"):
+        cli.main([
+            "--provider", "gemini", "--task-id", "t", "--problem", "p",
+            "--workspace", str(tmp_path), "--model-timeout-seconds", "0",
+        ])
