@@ -86,3 +86,69 @@ def test_output_limit_is_configurable(monkeypatch):
     assert seen[0]["generationConfig"]["maxOutputTokens"] == 128
     with pytest.raises(ValueError, match="positive"):
         GeminiModel(api_key="fake", tool_specs=[], max_output_tokens=0)
+
+
+def test_http_boundary_enforces_minimum_start_interval_without_real_sleep(monkeypatch):
+    import io
+    from coding_agent import gemini as gemini_module
+
+    clock = [100.0]
+    sleeps = []
+    starts = []
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    def fake_urlopen(request, timeout):
+        starts.append(clock[0])
+        assert request.full_url.endswith("gemini-3.8-flash:generateContent")
+        assert timeout == 60.0
+        return io.BytesIO(b"{}")
+
+    monkeypatch.setattr(gemini_module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(gemini_module.time, "sleep", fake_sleep)
+    monkeypatch.setattr(gemini_module, "urlopen", fake_urlopen)
+    model = GeminiModel(api_key="test-only", tool_specs=[])
+
+    model._post({"contents": []})       # first attempt: immediate
+    clock[0] = 104.0
+    model._post({"contents": []})       # wait until 115
+    clock[0] = 117.0
+    model._post({"contents": []})       # wait until 130
+
+    assert starts == [100.0, 115.0, 130.0]
+    assert sleeps == [11.0, 13.0]
+
+
+def test_http_error_does_not_retry_or_bypass_next_request_slot(monkeypatch):
+    import io
+    from coding_agent import gemini as gemini_module
+
+    clock = [200.0]
+    starts = []
+    sleeps = []
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    def fake_urlopen(request, timeout):
+        starts.append(clock[0])
+        if len(starts) == 1:
+            raise OSError("simulated HTTP 429")
+        return io.BytesIO(b"{}")
+
+    monkeypatch.setattr(gemini_module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(gemini_module.time, "sleep", fake_sleep)
+    monkeypatch.setattr(gemini_module, "urlopen", fake_urlopen)
+    model = GeminiModel(api_key="test-only", tool_specs=[])
+
+    with pytest.raises(OSError, match="429"):
+        model._post({"contents": []})
+    assert starts == [200.0]  # no automatic retries
+
+    clock[0] = 203.0
+    model._post({"contents": []})
+    assert starts == [200.0, 215.0]
+    assert sleeps == [12.0]

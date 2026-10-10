@@ -1,9 +1,14 @@
 import json
+import time
 from typing import Any
 from urllib.request import Request, urlopen
 
 from coding_agent.contracts import ModelFinishReason, ModelResponse, ToolCall, Usage
 from coding_agent.tools.base import ToolSpec
+
+
+# One Agent instance makes synchronous calls. Leave headroom below 5 RPM.
+MIN_REQUEST_INTERVAL_SECONDS = 15.0
 
 
 def _merge_consecutive_user_turns(messages: list[dict]) -> list[dict]:
@@ -39,6 +44,7 @@ class GeminiModel:
         if max_output_tokens <= 0:
             raise ValueError("max_output_tokens must be positive")
         self.max_output_tokens = max_output_tokens
+        self._last_request_started_at: float | None = None
 
         self._tools = [
             {
@@ -254,6 +260,15 @@ class GeminiModel:
             },
             method="POST",
         )
+
+        # Pace actual HTTP attempts, not Agent steps. The first call is immediate.
+        # This is instance-local; other clients may share the project's 5 RPM quota.
+        now = time.monotonic()
+        if self._last_request_started_at is not None:
+            remaining = MIN_REQUEST_INTERVAL_SECONDS - (now - self._last_request_started_at)
+            if remaining > 0:
+                time.sleep(remaining)
+        self._last_request_started_at = time.monotonic()
 
         with urlopen(request, timeout=self.timeout) as response:
             return json.load(response)
