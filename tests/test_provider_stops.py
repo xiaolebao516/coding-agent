@@ -49,7 +49,7 @@ def test_deepseek_invalid_tool_arguments_keep_usage(ds_usage, arguments):
         }]},
     }]}
     response = parse_deepseek_response(raw, "deepseek-flash")
-    assert response.finish_reason == ModelFinishReason.PROVIDER_STOPPED
+    assert response.finish_reason == ModelFinishReason.INVALID_ACTION
     assert response.stop_detail == "deepseek:invalid_tool_call"
     assert response.tool_call is None
     assert response.usage.input_tokens == 24
@@ -69,6 +69,7 @@ def test_deepseek_parallel_tool_calls_preserve_usage(ds_usage):
         "message": {"tool_calls": [call, call]},
     }]}
     response = parse_deepseek_response(raw, "deepseek-flash")
+    assert response.finish_reason == ModelFinishReason.INVALID_ACTION
     assert response.stop_detail == "deepseek:unsupported_tool_calls"
     assert response.tool_call is None
     assert response.usage.input_tokens == 24
@@ -76,8 +77,6 @@ def test_deepseek_parallel_tool_calls_preserve_usage(ds_usage):
 
 @pytest.mark.parametrize("raw,detail", [
     ({"promptFeedback": {"blockReason": "SAFETY"}}, "gemini:SAFETY"),
-    ({"candidates": [{"finishReason": "MALFORMED_FUNCTION_CALL", "content": {
-        "parts": [{"functionCall": {"id": "bad"}}]}}]}, "gemini:MALFORMED_FUNCTION_CALL"),
     ({"candidates": [{"finishReason": "SAFETY", "content": {
         "parts": [{"functionCall": {"id": "bad"}}]}}]}, "gemini:SAFETY"),
 ])
@@ -101,6 +100,7 @@ def test_gemini_parallel_calls_keep_usage(monkeypatch):
         "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 4},
     })
     response = model.generate([{"role": "user", "content": "hi"}])
+    assert response.finish_reason == ModelFinishReason.INVALID_ACTION
     assert response.stop_detail == "gemini:unsupported_tool_calls"
     assert response.tool_call is None
     assert response.usage.output_tokens == 4
@@ -133,3 +133,88 @@ def test_agent_provider_stop_is_not_success_and_preserves_billing():
     assert [e.type for e in trajectory.events] == ["model_response", "terminal"]
     assert trajectory.events[0].data["stop_detail"] == "deepseek:content_filter"
     assert trajectory.stop_reason == StopReason.PROVIDER_STOPPED
+
+
+# ---------------------------------------------------------------------------
+# Recoverable invalid actions (model format errors) vs provider stops
+# ---------------------------------------------------------------------------
+
+
+def test_gemini_malformed_function_call_is_recoverable(monkeypatch):
+    model = GeminiModel(api_key="dummy", tool_specs=[])
+    monkeypatch.setattr(model, "_post", lambda payload: {
+        "candidates": [{"finishReason": "MALFORMED_FUNCTION_CALL", "content": {
+            "parts": [{"functionCall": {"id": "bad"}}]}}],
+        "usageMetadata": {"promptTokenCount": 7, "candidatesTokenCount": 2},
+    })
+    response = model.generate([{"role": "user", "content": "hi"}])
+    assert response.finish_reason == ModelFinishReason.INVALID_ACTION
+    assert response.stop_detail == "gemini:MALFORMED_FUNCTION_CALL"
+    assert response.tool_call is None
+    assert response.usage.input_tokens == 7
+
+
+def test_gemini_merges_consecutive_user_turns(monkeypatch):
+    model = GeminiModel(api_key="dummy", tool_specs=[])
+    sent = []
+
+    def fake_post(payload):
+        sent.append(payload)
+        return {"candidates": [{"finishReason": "STOP", "content": {
+            "parts": [{"text": "ok"}]}}]}
+
+    monkeypatch.setattr(model, "_post", fake_post)
+    model.generate([
+        {"role": "user", "content": "task"},
+        {"role": "user", "content": "feedback"},
+    ])
+    contents = sent[0]["contents"]
+    assert [c["role"] for c in contents] == ["user"]
+    assert [p["text"] for p in contents[0]["parts"]] == ["task", "feedback"]
+
+
+class HistoryRecordingModel(FakeModel):
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.seen = []
+
+    def generate(self, history):
+        self.seen.append([dict(item) for item in history])
+        return super().generate(history)
+
+
+INVALID = ModelResponse(
+    content=None,
+    tool_call=None,
+    usage=Usage(input_tokens=10, output_tokens=2, cost_usd=0.001),
+    finish_reason=ModelFinishReason.INVALID_ACTION,
+    stop_detail="deepseek:invalid_tool_call",
+)
+
+
+def test_agent_feeds_invalid_action_back_and_continues():
+    model = HistoryRecordingModel([
+        INVALID,
+        ModelResponse(content="done", tool_call=None,
+                      usage=Usage(input_tokens=12, output_tokens=1, cost_usd=0.001)),
+    ])
+    result = Agent(model, ToolRegistry([BashTool()]), max_steps=5, budget=1.0).run(
+        Task("invalid-1", "do it"), NoExecution(), TrajectoryRecorder(),
+    )
+    assert result.stop_reason == StopReason.MODEL_FINISHED
+    assert result.final_message == "done"
+    assert result.steps == 1
+    assert result.usage.input_tokens == 22  # billed usage of the invalid call kept
+    second_call_history = model.seen[1]
+    assert second_call_history[-1]["role"] == "user"
+    assert "deepseek:invalid_tool_call" in second_call_history[-1]["content"]
+
+
+def test_agent_repeated_invalid_actions_are_bounded_by_max_steps():
+    model = FakeModel([INVALID, INVALID, INVALID])
+    result = Agent(model, ToolRegistry([BashTool()]), max_steps=3, budget=1.0).run(
+        Task("invalid-2", "do it"), NoExecution(), TrajectoryRecorder(),
+    )
+    assert result.stop_reason == StopReason.MAX_STEPS
+    assert result.steps == 3
+    assert result.usage.input_tokens == 30

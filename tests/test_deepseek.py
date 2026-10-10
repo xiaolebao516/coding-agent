@@ -228,7 +228,7 @@ def test_parse_rejects_multiple_tool_calls(stub_usage):
 
     response = parse_deepseek_response(_raw(message), MODEL)
     assert response.tool_call is None
-    assert response.finish_reason == deepseek.ModelFinishReason.PROVIDER_STOPPED
+    assert response.finish_reason == deepseek.ModelFinishReason.INVALID_ACTION
     assert response.stop_detail == "deepseek:unsupported_tool_calls"
 
 

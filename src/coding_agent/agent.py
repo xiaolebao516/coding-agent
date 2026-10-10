@@ -42,6 +42,14 @@ def _budget_stop_reason(
     return None
 
 
+def _invalid_action_feedback(detail: str | None) -> str:
+    return (
+        "Your previous response could not be executed"
+        f" ({detail or 'invalid action'}). Reply with exactly one tool call whose"
+        " arguments are a valid JSON object, or with a final answer and no tool call."
+    )
+
+
 class Agent:
     def __init__(
         self,
@@ -143,6 +151,17 @@ class Agent:
                     usage=total_usage,
                 )
                 break
+            # Recoverable: the model's action could not be executed. Tell it why and
+            # let it try again, like the unknown-tool path. Bounded by max_steps.
+            if response.finish_reason == ModelFinishReason.INVALID_ACTION:
+                history.append(
+                    {
+                        "role": "user",
+                        "content": _invalid_action_feedback(response.stop_detail),
+                    }
+                )
+                steps += 1
+                continue
             final_message = response.content
             if response.tool_call is None:
                 result = AgentResult(

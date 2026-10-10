@@ -221,7 +221,7 @@ def parse_deepseek_response(raw: dict[str, Any], model: str) -> ModelResponse:
             content=message.get("content"),
             tool_call=None,
             usage=usage,
-            finish_reason=ModelFinishReason.PROVIDER_STOPPED,
+            finish_reason=ModelFinishReason.INVALID_ACTION,
             stop_detail="deepseek:unsupported_tool_calls",
         )
 
@@ -246,7 +246,7 @@ def parse_deepseek_response(raw: dict[str, Any], model: str) -> ModelResponse:
                 content=message.get("content"),
                 tool_call=None,
                 usage=usage,
-                finish_reason=ModelFinishReason.PROVIDER_STOPPED,
+                finish_reason=ModelFinishReason.INVALID_ACTION,
                 stop_detail="deepseek:invalid_tool_call",
             )
 

@@ -6,6 +6,21 @@ from coding_agent.contracts import ModelFinishReason, ModelResponse, ToolCall, U
 from coding_agent.tools.base import ToolSpec
 
 
+def _merge_consecutive_user_turns(messages: list[dict]) -> list[dict]:
+    """Gemini expects alternating turns; fold adjacent user turns into one.
+
+    Adjacent user turns appear when a tool result (sent as role "user") is
+    followed by agent feedback, e.g. after an invalid action.
+    """
+    merged: list[dict] = []
+    for message in messages:
+        if merged and message["role"] == "user" and merged[-1]["role"] == "user":
+            merged[-1] = {"role": "user", "parts": merged[-1]["parts"] + message["parts"]}
+        else:
+            merged.append(message)
+    return merged
+
+
 class GeminiModel:
     provider = "gemini"
 
@@ -100,7 +115,7 @@ class GeminiModel:
             else:
                 raise ValueError(f"unsupported role: {role}")
 
-        return messages
+        return _merge_consecutive_user_turns(messages)
 
     def generate(self, history: list[dict]) -> ModelResponse:
         payload = {
@@ -162,6 +177,16 @@ class GeminiModel:
             )
 
         reason = candidate.get("finishReason")
+        if reason == "MALFORMED_FUNCTION_CALL":
+            # The model tried to call a tool but produced an invalid call: recoverable.
+            return ModelResponse(
+                content=content,
+                tool_call=None,
+                usage=usage,
+                finish_reason=ModelFinishReason.INVALID_ACTION,
+                stop_detail="gemini:MALFORMED_FUNCTION_CALL",
+            )
+
         if reason not in (None, "STOP"):
             return ModelResponse(
                 content=content,
@@ -178,7 +203,7 @@ class GeminiModel:
                 content=content,
                 tool_call=None,
                 usage=usage,
-                finish_reason=ModelFinishReason.PROVIDER_STOPPED,
+                finish_reason=ModelFinishReason.INVALID_ACTION,
                 stop_detail="gemini:unsupported_tool_calls",
             )
 
@@ -194,7 +219,7 @@ class GeminiModel:
                     content=content,
                     tool_call=None,
                     usage=usage,
-                    finish_reason=ModelFinishReason.PROVIDER_STOPPED,
+                    finish_reason=ModelFinishReason.INVALID_ACTION,
                     stop_detail="gemini:invalid_tool_call",
                 )
             call_id = call["id"]

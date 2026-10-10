@@ -33,7 +33,11 @@ class Usage:
 class ModelFinishReason(str, Enum):
     FINISHED = "finished"
     OUTPUT_TRUNCATED = "output_truncated"
+    # Provider refused/aborted (safety block, content filter, ...): not recoverable here.
     PROVIDER_STOPPED = "provider_stopped"
+    # The model produced an action we cannot execute (bad JSON args, several tool
+    # calls, malformed call). Recoverable: tell the model and let it try again.
+    INVALID_ACTION = "invalid_action"
 
 
 @dataclass
