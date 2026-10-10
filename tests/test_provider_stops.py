@@ -257,4 +257,3 @@ def test_invalid_action_with_missing_usage_does_not_retry_under_token_cap():
     assert result.stop_reason == StopReason.TOKEN_USAGE_UNKNOWN
     assert result.steps == 0
     assert model.index == 1
-
