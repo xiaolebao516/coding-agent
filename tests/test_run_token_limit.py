@@ -1,7 +1,6 @@
 """Run-level token limiter contract. Offline FakeModel tests.
 
-The Agent behavior tests are intentionally RED: students implement the
-provider-neutral token decision after aggregating each model response.
+Agent aggregates provider usage before checking whether it can do more work.
 """
 import pytest
 
@@ -48,7 +47,7 @@ def tool(call_id):
 
 
 def test_cap_is_run_cumulative_and_stops_before_second_tool():
-    # RED: 8+2 first call, 17+5 second call => 32 >= cap 30.
+    # 8+2 first call, 17+5 second call => 32 >= cap 30.
     result, model, runtime, recorder = run_agent([
         ModelResponse(
             content=None, tool_call=tool("one"),
@@ -75,7 +74,7 @@ def test_cap_is_run_cumulative_and_stops_before_second_tool():
 
 
 def test_unknown_token_usage_fails_closed_when_cap_is_active():
-    # RED: No output-token count means the total cannot be known.
+    # No output-token count means the total cannot be known.
     result, model, runtime, recorder = run_agent([
         ModelResponse(
             content=None, tool_call=tool("one"),
@@ -92,7 +91,7 @@ def test_unknown_token_usage_fails_closed_when_cap_is_active():
 
 
 def test_cache_hit_tokens_are_not_counted_twice():
-    # RED if cache_read_tokens are counted in addition to input_tokens.
+    # This fails if cache_read_tokens are counted in addition to input_tokens.
     # First call costs 100 prompt + 10 output = 110 tokens, NOT 200.
     result, model, runtime, recorder = run_agent([
         ModelResponse(
@@ -158,3 +157,32 @@ def test_explicit_gemini_usd_budget_is_rejected_before_any_work(monkeypatch, tmp
             "--problem", "p",
             "--workspace", str(tmp_path),
         ])
+
+
+def test_output_truncation_takes_priority_over_unknown_or_exceeded_tokens():
+    from coding_agent.contracts import ModelFinishReason
+
+    result, model, runtime, recorder = run_agent([
+        ModelResponse(
+            content="partial",
+            tool_call=tool("never"),
+            usage=Usage(input_tokens=500, output_tokens=None),
+            finish_reason=ModelFinishReason.OUTPUT_TRUNCATED,
+        ),
+    ], cap=50)
+    assert result.stop_reason is StopReason.OUTPUT_TRUNCATED
+    assert result.usage.input_tokens == 500
+    assert result.final_message is None
+    assert model.index == 1
+    assert not runtime.commands
+
+
+def test_unknown_usage_in_final_response_does_not_fake_token_total():
+    result, model, runtime, recorder = run_agent([
+        ModelResponse(content="done", tool_call=None,
+                      usage=Usage(input_tokens=10, output_tokens=None)),
+    ], cap=50)
+    assert result.stop_reason is StopReason.TOKEN_USAGE_UNKNOWN
+    assert result.usage.input_tokens == 10
+    assert result.usage.output_tokens is None
+    assert not runtime.commands
