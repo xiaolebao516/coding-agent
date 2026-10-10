@@ -1,22 +1,26 @@
-"""Minimal OpenRouter free-model adapter for the existing one-tool Agent Loop."""
+"""Groq Free Plan adapter for the existing single-tool Agent Loop."""
 import json
 from typing import Any
 from urllib.request import Request, urlopen
 
 from coding_agent.contracts import ModelResponse
-from coding_agent.openai_compatible import parse_chat_response
 from coding_agent.deepseek import to_deepseek_messages, to_deepseek_tools
+from coding_agent.openai_compatible import parse_chat_response
 from coding_agent.tools.base import ToolSpec
 
-DEFAULT_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
-DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_MODEL = "openai/gpt-oss-120b"
+DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
+
+# Narrow model allowlist for the free-model experiment: no arbitrary paid IDs.
+ALLOWED_MODELS = frozenset({DEFAULT_MODEL})
 
 
-def parse_openrouter_response(raw: dict[str, Any]) -> ModelResponse:
-    return parse_chat_response(raw, provider="openrouter", require_zero_cost=True)
+def parse_groq_response(raw: dict[str, Any]) -> ModelResponse:
+    return parse_chat_response(raw, provider="groq")
 
-class OpenRouterModel:
-    provider = "openrouter"
+
+class GroqModel:
+    provider = "groq"
 
     def __init__(
         self,
@@ -26,12 +30,12 @@ class OpenRouterModel:
         model: str = DEFAULT_MODEL,
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = 120.0,
-        max_output_tokens: int = 8192,
+        max_output_tokens: int = 4096,
     ):
-        if not model.endswith(":free"):
-            raise ValueError("OpenRouter adapter only permits explicit :free models")
+        if model not in ALLOWED_MODELS:
+            raise ValueError("Groq free-tier adapter only supports verified model IDs")
         if not api_key:
-            raise ValueError("OpenRouter API key is required")
+            raise ValueError("GROQ_API_KEY is required")
         if timeout <= 0 or max_output_tokens <= 0:
             raise ValueError("timeout and max_output_tokens must be positive")
         self._api_key = api_key
@@ -45,7 +49,7 @@ class OpenRouterModel:
         payload = {
             "model": self.model,
             "messages": to_deepseek_messages(history),
-            "max_tokens": self.max_output_tokens,
+            "max_completion_tokens": self.max_output_tokens,
             "stream": False,
         }
         if self._tools:
@@ -55,7 +59,7 @@ class OpenRouterModel:
         return payload
 
     def generate(self, history: list[dict[str, Any]]) -> ModelResponse:
-        return parse_openrouter_response(self._post(self.build_payload(history)))
+        return parse_groq_response(self._post(self.build_payload(history)))
 
     def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
         request = Request(
@@ -68,6 +72,6 @@ class OpenRouterModel:
             },
             method="POST",
         )
-        # HTTP 429 is propagated to Agent's existing MODEL_ERROR path. No retries.
+        # No automated retry on free-tier 429. The caller records MODEL_ERROR.
         with urlopen(request, timeout=self.timeout) as response:
             return json.load(response)
