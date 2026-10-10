@@ -178,40 +178,83 @@ def usage_from_deepseek(raw_usage: dict[str, Any] | None, model: str) -> Usage:
     return usage
 
 def parse_deepseek_response(raw: dict[str, Any], model: str) -> ModelResponse:
-    choice = raw["choices"][0]
-    message = choice.get("message") or {}
+    # Always extract Usage before validating the provider's content/shape.
     usage = usage_from_deepseek(raw.get("usage"), model)
+    choices = raw.get("choices") or []
+    if not choices or not isinstance(choices[0], dict):
+        return ModelResponse(
+            content=None,
+            tool_call=None,
+            usage=usage,
+            finish_reason=ModelFinishReason.PROVIDER_STOPPED,
+            stop_detail="deepseek:missing_choice",
+        )
 
-    # The model may have returned incomplete JSON in a tool call.
-    # Detect truncation BEFORE parsing any tool arguments.
-    if choice.get("finish_reason") == "length":
+    choice = choices[0]
+    message = choice.get("message") or {}
+    reason = choice.get("finish_reason")
+
+    if reason == "length":
+        # Truncated tool JSON is not safe to execute.
         return ModelResponse(
             content=message.get("content"),
             tool_call=None,
             usage=usage,
             finish_reason=ModelFinishReason.OUTPUT_TRUNCATED,
+            stop_detail="deepseek:length",
+        )
+
+    if reason not in ("stop", "tool_calls", None):
+        # Includes content_filter, aborted, insufficient_system_resource and
+        # future finish reasons not yet understood by this adapter.
+        return ModelResponse(
+            content=message.get("content"),
+            tool_call=None,
+            usage=usage,
+            finish_reason=ModelFinishReason.PROVIDER_STOPPED,
+            stop_detail=f"deepseek:{reason}",
         )
 
     tool_calls = message.get("tool_calls") or []
-
-    if len(tool_calls) > 1:
-        raise ValueError(f"expected at most one tool call, got {len(tool_calls)}")
+    if not isinstance(tool_calls, list) or len(tool_calls) > 1:
+        return ModelResponse(
+            content=message.get("content"),
+            tool_call=None,
+            usage=usage,
+            finish_reason=ModelFinishReason.INVALID_ACTION,
+            stop_detail="deepseek:unsupported_tool_calls",
+        )
 
     tool_call = None
     if tool_calls:
-        call = tool_calls[0]
-        tool_call = ToolCall(
-            id=call["id"],
-            name=call["function"]["name"],
-            arguments=json.loads(call["function"]["arguments"]),
-        )
+        try:
+            call = tool_calls[0]
+            arguments = json.loads(call["function"]["arguments"])
+            if not isinstance(arguments, dict):
+                raise ValueError("tool arguments must be an object")
+            if not call["id"] or not call["function"]["name"]:
+                raise ValueError("missing tool-call id/name")
+            tool_call = ToolCall(
+                id=call["id"],
+                name=call["function"]["name"],
+                arguments=arguments,
+            )
+        except (KeyError, TypeError, ValueError, AttributeError):
+            # A malformed provider response can still be billable. Do not
+            # discard Usage by propagating a JSON decode error.
+            return ModelResponse(
+                content=message.get("content"),
+                tool_call=None,
+                usage=usage,
+                finish_reason=ModelFinishReason.INVALID_ACTION,
+                stop_detail="deepseek:invalid_tool_call",
+            )
 
     return ModelResponse(
         content=message.get("content"),
         tool_call=tool_call,
         usage=usage,
     )
-
 
 # ---------------------------------------------------------------------------
 # Model

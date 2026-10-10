@@ -33,6 +33,8 @@ class Usage:
 class ModelFinishReason(str, Enum):
     FINISHED = "finished"
     OUTPUT_TRUNCATED = "output_truncated"
+    PROVIDER_STOPPED = "provider_stopped"  # provider refusal / aborted completion
+    INVALID_ACTION = "invalid_action"  # bad tool action; can ask model to repair
 
 
 @dataclass
@@ -41,10 +43,12 @@ class ModelResponse:
     tool_call: ToolCall | None
     usage: Usage = field(default_factory=Usage)
     finish_reason: ModelFinishReason = ModelFinishReason.FINISHED
+    stop_detail: str | None = None  # diagnostic label (no secrets)
 
 class StopReason(str, Enum):
     MODEL_FINISHED = "model_finished"
     OUTPUT_TRUNCATED = "output_truncated"
+    PROVIDER_STOPPED = "provider_stopped"
     MAX_STEPS = "max_steps"
     BUDGET_EXHAUSTED = "budget_exhausted"
     BUDGET_UNKNOWN = "budget_unknown"

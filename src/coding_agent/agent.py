@@ -42,6 +42,14 @@ def _budget_stop_reason(
     return None
 
 
+def _invalid_action_feedback(detail: str | None) -> str:
+    return (
+        "Your previous response could not be executed"
+        f" ({detail or 'invalid action'}). Reply with exactly one tool call whose"
+        " arguments are a valid JSON object, or with a final answer and no tool call."
+    )
+
+
 class Agent:
     def __init__(
         self,
@@ -110,7 +118,8 @@ class Agent:
                                 else None
                             ),
                             "usage": response.usage,
-                            "finish_reason": response.finish_reason.value
+                            "finish_reason": response.finish_reason.value,
+                            "stop_detail": response.stop_detail,
                         },
                     )
                 )
@@ -138,6 +147,16 @@ class Agent:
                 )
                 break
 
+            # Provider refusal/termination cannot be repaired by action feedback.
+            if response.finish_reason == ModelFinishReason.PROVIDER_STOPPED:
+                result = AgentResult(
+                    StopReason.PROVIDER_STOPPED,
+                    final_message=None,
+                    steps=steps,
+                    usage=total_usage,
+                )
+                break
+
             # A run-level cap is checked AFTER this response's usage is counted,
             # but BEFORE dispatching any further tool action.
             if self.max_total_tokens is not None:
@@ -159,7 +178,10 @@ class Agent:
                 # The final response is already complete: no further provider
                 # requests or tool executions need to be authorized.
                 if (
-                    response.tool_call is not None
+                    (
+                        response.tool_call is not None
+                        or response.finish_reason == ModelFinishReason.INVALID_ACTION
+                    )
                     and total_tokens >= self.max_total_tokens
                 ):
                     result = AgentResult(
@@ -169,6 +191,16 @@ class Agent:
                         usage=total_usage,
                     )
                     break
+
+            # A recoverable invalid action also counts as a step. Respect the
+            # token cap above before authorizing another model request.
+            if response.finish_reason == ModelFinishReason.INVALID_ACTION:
+                history.append({
+                    "role": "user",
+                    "content": _invalid_action_feedback(response.stop_detail),
+                })
+                steps += 1
+                continue
 
             final_message = response.content
             if response.tool_call is None:
