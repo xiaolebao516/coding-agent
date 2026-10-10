@@ -137,6 +137,39 @@ class Agent:
                     usage=total_usage,
                 )
                 break
+
+            # A run-level cap is checked AFTER this response's usage is counted,
+            # but BEFORE dispatching any further tool action.
+            if self.max_total_tokens is not None:
+                if (
+                    total_usage.input_tokens is None
+                    or total_usage.output_tokens is None
+                ):
+                    result = AgentResult(
+                        StopReason.TOKEN_USAGE_UNKNOWN,
+                        final_message=None,
+                        steps=steps,
+                        usage=total_usage,
+                    )
+                    break
+
+                total_tokens = (
+                    total_usage.input_tokens + total_usage.output_tokens
+                )
+                # The final response is already complete: no further provider
+                # requests or tool executions need to be authorized.
+                if (
+                    response.tool_call is not None
+                    and total_tokens >= self.max_total_tokens
+                ):
+                    result = AgentResult(
+                        StopReason.TOKEN_LIMIT_EXHAUSTED,
+                        final_message=None,
+                        steps=steps,
+                        usage=total_usage,
+                    )
+                    break
+
             final_message = response.content
             if response.tool_call is None:
                 result = AgentResult(
