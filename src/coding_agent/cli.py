@@ -25,12 +25,14 @@ def run_once(
     max_steps: int,
     budget: float | None,
     trajectory_path: str,
+    max_total_tokens: int | None = None,
 ):
     agent = Agent(
         model=model,
         tool_registry=registry,
         max_steps=max_steps,
         budget=budget,
+        max_total_tokens=max_total_tokens,
     )
 
     recorder = TrajectoryRecorder()
@@ -94,8 +96,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--budget",
         type=float,
-        default=1.0,
-        help="Maximum model cost in USD.",
+        default=None,
+        help="Maximum model cost in USD (DeepSeek default: 1.0; unavailable for Gemini).",
     )
 
     parser.add_argument(
@@ -123,6 +125,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--max-total-tokens",
+        type=int,
+        default=None,
+        help="Soft run-level input + output token limit (Gemini default: 20000).",
+    )
+
+    parser.add_argument(
         "--max-output-tokens",
         type=int,
         default=None,
@@ -134,6 +143,11 @@ def build_parser() -> argparse.ArgumentParser:
 # 用户真正执行命令时进入这里
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+
+    if args.max_total_tokens is not None and args.max_total_tokens <= 0:
+        raise SystemExit("--max-total-tokens must be positive")
+    if args.provider == "gemini" and args.budget is not None:
+        raise SystemExit("--budget is a USD limit and is not supported by Gemini; use --max-total-tokens")
 
     # Fail fast: before any container or model is created.
     # Never print the key value, not even a prefix.
@@ -164,12 +178,15 @@ def main(argv: list[str] | None = None) -> None:
             api_key=api_key,
             tool_specs=registry.specs(),
             model=args.model,
-            max_output_tokens=args.max_output_tokens or 512,
+            max_output_tokens=(
+                args.max_output_tokens if args.max_output_tokens is not None else 512
+            ),
         )
         budget = None
+        max_total_tokens = (
+            args.max_total_tokens if args.max_total_tokens is not None else 20_000
+        )
     else:
-        if args.max_output_tokens is not None:
-            raise SystemExit("--max-output-tokens is currently only supported by gemini")
         billing = DeepSeekBilling(api_key=api_key)
         if not billing.is_available():
             raise SystemExit("DeepSeek account has no available balance.")
@@ -177,8 +194,10 @@ def main(argv: list[str] | None = None) -> None:
             api_key=api_key,
             tool_specs=registry.specs(),
             model=args.model,
+            max_output_tokens=args.max_output_tokens,
         )
-        budget = args.budget
+        budget = args.budget if args.budget is not None else 1.0
+        max_total_tokens = args.max_total_tokens
 
     runtime = DockerRuntime(
         workspace=Path(args.workspace),
@@ -193,6 +212,7 @@ def main(argv: list[str] | None = None) -> None:
         max_steps=args.max_steps,
         budget=budget,
         trajectory_path=args.trajectory_path,
+        max_total_tokens=max_total_tokens,
     )
 
     print(

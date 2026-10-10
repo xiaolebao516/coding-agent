@@ -57,11 +57,15 @@ class Agent:
         tool_registry: ToolRegistry,
         max_steps: int,
         budget: float | None,
+        max_total_tokens: int | None = None,
     ):
         self.model = model
         self.tool_registry = tool_registry
         self.max_steps = max_steps
         self.budget = budget
+        if max_total_tokens is not None and max_total_tokens <= 0:
+            raise ValueError("max_total_tokens must be positive")
+        self.max_total_tokens = max_total_tokens
 
     def run(
         self, task: Task, runtime: Runtime, recorder: TrajectoryRecorder
@@ -72,6 +76,7 @@ class Agent:
             model=self.model.model,
             max_steps=self.max_steps,
             budget=self.budget,
+            max_total_tokens=self.max_total_tokens,
         )
         steps = 0
         total_usage = Usage(
@@ -141,8 +146,8 @@ class Agent:
                     usage=total_usage,
                 )
                 break
-            # A provider rejection/invalid response is not a successful final answer.
-            # The adapter has already preserved any billed token usage.
+
+            # Provider refusal/termination cannot be repaired by action feedback.
             if response.finish_reason == ModelFinishReason.PROVIDER_STOPPED:
                 result = AgentResult(
                     StopReason.PROVIDER_STOPPED,
@@ -151,17 +156,52 @@ class Agent:
                     usage=total_usage,
                 )
                 break
-            # Recoverable: the model's action could not be executed. Tell it why and
-            # let it try again, like the unknown-tool path. Bounded by max_steps.
-            if response.finish_reason == ModelFinishReason.INVALID_ACTION:
-                history.append(
-                    {
-                        "role": "user",
-                        "content": _invalid_action_feedback(response.stop_detail),
-                    }
+
+            # A run-level cap is checked AFTER this response's usage is counted,
+            # but BEFORE dispatching any further tool action.
+            if self.max_total_tokens is not None:
+                if (
+                    total_usage.input_tokens is None
+                    or total_usage.output_tokens is None
+                ):
+                    result = AgentResult(
+                        StopReason.TOKEN_USAGE_UNKNOWN,
+                        final_message=None,
+                        steps=steps,
+                        usage=total_usage,
+                    )
+                    break
+
+                total_tokens = (
+                    total_usage.input_tokens + total_usage.output_tokens
                 )
+                # The final response is already complete: no further provider
+                # requests or tool executions need to be authorized.
+                if (
+                    (
+                        response.tool_call is not None
+                        or response.finish_reason == ModelFinishReason.INVALID_ACTION
+                    )
+                    and total_tokens >= self.max_total_tokens
+                ):
+                    result = AgentResult(
+                        StopReason.TOKEN_LIMIT_EXHAUSTED,
+                        final_message=None,
+                        steps=steps,
+                        usage=total_usage,
+                    )
+                    break
+
+            # A recoverable invalid action also counts as a step. Respect the
+            # token cap above before authorizing another model request.
+            if response.finish_reason == ModelFinishReason.INVALID_ACTION:
+                history.append({
+                    "role": "user",
+                    "content": _invalid_action_feedback(response.stop_detail),
+                })
                 steps += 1
                 continue
+
             final_message = response.content
             if response.tool_call is None:
                 result = AgentResult(

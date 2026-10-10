@@ -218,3 +218,43 @@ def test_agent_repeated_invalid_actions_are_bounded_by_max_steps():
     assert result.stop_reason == StopReason.MAX_STEPS
     assert result.steps == 3
     assert result.usage.input_tokens == 30
+
+
+def test_invalid_action_cannot_bypass_cumulative_token_cap():
+    """An invalid action has no ToolCall, but it would request another model turn."""
+    model = FakeModel([ModelResponse(
+        content=None,
+        tool_call=None,
+        usage=Usage(input_tokens=32, output_tokens=9, cost_usd=None),
+        finish_reason=ModelFinishReason.INVALID_ACTION,
+        stop_detail="gemini:MALFORMED_FUNCTION_CALL",
+    )])
+    runtime = NoExecution()
+    recorder = TrajectoryRecorder()
+    result = Agent(
+        model, ToolRegistry([BashTool()]),
+        max_steps=5, budget=None, max_total_tokens=40,
+    ).run(Task("cap-invalid", "do it"), runtime, recorder)
+    assert result.stop_reason == StopReason.TOKEN_LIMIT_EXHAUSTED
+    assert result.steps == 0
+    assert result.usage.input_tokens == 32
+    assert model.index == 1
+    assert [e.type for e in recorder.trajectory.events] == ["model_response", "terminal"]
+
+
+def test_invalid_action_with_missing_usage_does_not_retry_under_token_cap():
+    model = FakeModel([ModelResponse(
+        content=None,
+        tool_call=None,
+        usage=Usage(input_tokens=None, output_tokens=9, cost_usd=None),
+        finish_reason=ModelFinishReason.INVALID_ACTION,
+        stop_detail="deepseek:invalid_tool_call",
+    )])
+    result = Agent(
+        model, ToolRegistry([BashTool()]),
+        max_steps=5, budget=None, max_total_tokens=40,
+    ).run(Task("cap-unknown", "do it"), NoExecution(), TrajectoryRecorder())
+    assert result.stop_reason == StopReason.TOKEN_USAGE_UNKNOWN
+    assert result.steps == 0
+    assert model.index == 1
+

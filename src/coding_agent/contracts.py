@@ -33,11 +33,8 @@ class Usage:
 class ModelFinishReason(str, Enum):
     FINISHED = "finished"
     OUTPUT_TRUNCATED = "output_truncated"
-    # Provider refused/aborted (safety block, content filter, ...): not recoverable here.
-    PROVIDER_STOPPED = "provider_stopped"
-    # The model produced an action we cannot execute (bad JSON args, several tool
-    # calls, malformed call). Recoverable: tell the model and let it try again.
-    INVALID_ACTION = "invalid_action"
+    PROVIDER_STOPPED = "provider_stopped"  # provider refusal / aborted completion
+    INVALID_ACTION = "invalid_action"  # bad tool action; can ask model to repair
 
 
 @dataclass
@@ -46,7 +43,7 @@ class ModelResponse:
     tool_call: ToolCall | None
     usage: Usage = field(default_factory=Usage)
     finish_reason: ModelFinishReason = ModelFinishReason.FINISHED
-    stop_detail: str | None = None  # diagnostic label, never provider credentials
+    stop_detail: str | None = None  # diagnostic label (no secrets)
 
 class StopReason(str, Enum):
     MODEL_FINISHED = "model_finished"
@@ -55,6 +52,8 @@ class StopReason(str, Enum):
     MAX_STEPS = "max_steps"
     BUDGET_EXHAUSTED = "budget_exhausted"
     BUDGET_UNKNOWN = "budget_unknown"
+    TOKEN_LIMIT_EXHAUSTED = "token_limit_exhausted"
+    TOKEN_USAGE_UNKNOWN = "token_usage_unknown"
     MODEL_ERROR = "model_error"
     RUNTIME_ERROR = "runtime_error"
 
