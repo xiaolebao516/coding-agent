@@ -122,6 +122,7 @@ def test_groq_http_api_key_only_header_and_429_no_retry(monkeypatch):
     request,timeout=sent[0]
     assert request.full_url == "https://api.groq.com/openai/v1/chat/completions"
     assert request.get_header("Authorization") == "Bearer secret"
+    assert request.get_header("User-agent") == "coding-agent/0.1"
     assert timeout == 120
     assert "secret" not in request.data.decode()
 

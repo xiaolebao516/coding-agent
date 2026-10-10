@@ -69,6 +69,9 @@ class GroqModel:
                 "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",
                 "Accept": "application/json",
+                # urllib otherwise identifies as Python-urllib/x.y; some gateways
+                # reject that default even when curl with the same key succeeds.
+                "User-Agent": "coding-agent/0.1",
             },
             method="POST",
         )
