@@ -226,8 +226,10 @@ def test_parse_rejects_multiple_tool_calls(stub_usage):
     }
     message = {"role": "assistant", "content": None, "tool_calls": [call, call]}
 
-    with pytest.raises(ValueError):
-        parse_deepseek_response(_raw(message), MODEL)
+    response = parse_deepseek_response(_raw(message), MODEL)
+    assert response.tool_call is None
+    assert response.finish_reason == deepseek.ModelFinishReason.PROVIDER_STOPPED
+    assert response.stop_detail == "deepseek:unsupported_tool_calls"
 
 
 # ---------------------------------------------------------------------------
