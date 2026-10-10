@@ -48,6 +48,8 @@ class StopReason(str, Enum):
     MAX_STEPS = "max_steps"
     BUDGET_EXHAUSTED = "budget_exhausted"
     BUDGET_UNKNOWN = "budget_unknown"
+    TOKEN_LIMIT_EXHAUSTED = "token_limit_exhausted"
+    TOKEN_USAGE_UNKNOWN = "token_usage_unknown"
     MODEL_ERROR = "model_error"
     RUNTIME_ERROR = "runtime_error"
 

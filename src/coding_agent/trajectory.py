@@ -29,6 +29,7 @@ class Trajectory:
 
     max_steps: int
     budget: float | None
+    max_total_tokens: int | None = None
 
     events: list[TrajectoryEvent] = field(default_factory=list)
 
@@ -64,6 +65,7 @@ class TrajectoryRecorder:
         model: str,
         max_steps: int,
         budget: float | None,
+        max_total_tokens: int | None = None,
     ) -> None:
         self._start_perf = perf_counter()
         started_at = datetime.now(timezone.utc).isoformat()
@@ -75,6 +77,7 @@ class TrajectoryRecorder:
                                          model=model,
                                          max_steps=max_steps,
                                          budget = budget,
+                                         max_total_tokens=max_total_tokens,
                                         )
 
             self.state = RecorderState.RUNNING
