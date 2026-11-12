@@ -4,6 +4,7 @@ import io
 import json
 
 import pytest
+from urllib.request import ProxyHandler
 
 from coding_agent import cli
 from coding_agent.contracts import ModelFinishReason, ModelResponse, ToolCall
@@ -90,7 +91,7 @@ def test_http_headers_and_no_proxy():
         base_url="http://100.94.210.64:3425/v1",
         tool_specs=[],
     )
-    assert any(getattr(handler, "proxies", None) == {} for handler in model._opener.handlers)
+    assert not any(isinstance(handler, ProxyHandler) for handler in model._opener.handlers)
     requests = []
 
     class FakeOpener:
