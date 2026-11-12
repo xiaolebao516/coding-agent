@@ -7,6 +7,7 @@ from coding_agent.contracts import Task
 from coding_agent.deepseek import DeepSeekModel
 from coding_agent.gemini import GeminiModel
 from coding_agent.groq import DEFAULT_MODEL as GROQ_DEFAULT_MODEL, GroqModel
+from coding_agent.magpie import DEFAULT_MODEL as MAGPIE_DEFAULT_MODEL, MagpieModel
 from coding_agent.openrouter import DEFAULT_MODEL as OPENROUTER_DEFAULT_MODEL, OpenRouterModel
 from coding_agent.model import Model
 from coding_agent.runtime.base import Runtime
@@ -24,6 +25,8 @@ API_KEY_ENV = "DEEPSEEK_API_KEY"
 GEMINI_API_KEY_ENV = "GEMINI_API_KEY"
 OPENROUTER_API_KEY_ENV = "OPENROUTER_API_KEY"
 GROQ_API_KEY_ENV = "GROQ_API_KEY"
+MAGPIE_API_KEY_ENV = "MAGPIE_API_KEY"
+MAGPIE_BASE_URL_ENV = "MAGPIE_BASE_URL"
 
 def run_once(
     task: Task,
@@ -114,7 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--provider",
-        choices=["deepseek", "gemini", "openrouter", "groq"],
+        choices=["deepseek", "gemini", "openrouter", "groq", "magpie"],
         default="deepseek",
     )
 
@@ -201,7 +204,7 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.max_total_tokens is not None and args.max_total_tokens <= 0:
         raise SystemExit("--max-total-tokens must be positive")
-    if args.provider in ("gemini", "openrouter", "groq") and args.budget is not None:
+    if args.provider in ("gemini", "openrouter", "groq", "magpie") and args.budget is not None:
         raise SystemExit("--budget is unavailable for this provider; use --max-total-tokens")
     if args.provider != "gemini" and args.thinking_level is not None:
         raise SystemExit("--thinking-level is only supported by Gemini")
@@ -218,11 +221,17 @@ def main(argv: list[str] | None = None) -> None:
         "gemini": GEMINI_API_KEY_ENV,
         "openrouter": OPENROUTER_API_KEY_ENV,
         "groq": GROQ_API_KEY_ENV,
+        "magpie": MAGPIE_API_KEY_ENV,
     }[args.provider]
 
     api_key = os.environ.get(api_key_env)
     if not api_key:
         raise SystemExit(f"{api_key_env} is not set or empty")
+    magpie_base_url = None
+    if args.provider == "magpie":
+        magpie_base_url = os.environ.get(MAGPIE_BASE_URL_ENV)
+        if not magpie_base_url:
+            raise SystemExit(f"{MAGPIE_BASE_URL_ENV} is not set or empty (include /v1)")
 
     task = Task(
         task_id=args.task_id,
@@ -252,6 +261,7 @@ def main(argv: list[str] | None = None) -> None:
             "deepseek": "deepseek-flash",
             "openrouter": OPENROUTER_DEFAULT_MODEL,
             "groq": GROQ_DEFAULT_MODEL,
+            "magpie": MAGPIE_DEFAULT_MODEL,
         }[args.provider]
 
     if args.provider == "gemini":
@@ -284,6 +294,16 @@ def main(argv: list[str] | None = None) -> None:
             tool_specs=registry.specs(),
             model=args.model,
             max_output_tokens=args.max_output_tokens if args.max_output_tokens is not None else 4096,
+        )
+        budget = None
+        max_total_tokens = args.max_total_tokens if args.max_total_tokens is not None else 60_000
+    elif args.provider == "magpie":
+        model = MagpieModel(
+            api_key=api_key,
+            base_url=magpie_base_url,
+            tool_specs=registry.specs(),
+            model=args.model,
+            max_output_tokens=args.max_output_tokens if args.max_output_tokens is not None else 8192,
         )
         budget = None
         max_total_tokens = args.max_total_tokens if args.max_total_tokens is not None else 60_000
