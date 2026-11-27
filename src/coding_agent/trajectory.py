@@ -24,8 +24,12 @@ class Trajectory:
     task_id: str
     started_at: str
 
+    provider: str
+    model: str
+
     max_steps: int
     budget: float | None
+    max_total_tokens: int | None = None
 
     events: list[TrajectoryEvent] = field(default_factory=list)
 
@@ -57,8 +61,11 @@ class TrajectoryRecorder:
     def start(
         self,
         task_id: str,
+        provider: str,
+        model: str,
         max_steps: int,
         budget: float | None,
+        max_total_tokens: int | None = None,
     ) -> None:
         self._start_perf = perf_counter()
         started_at = datetime.now(timezone.utc).isoformat()
@@ -66,8 +73,11 @@ class TrajectoryRecorder:
             self.trajectory = Trajectory(run_id=str(uuid4()),
                                          started_at=started_at,
                                          task_id=task_id,
+                                         provider=provider,
+                                         model=model,
                                          max_steps=max_steps,
                                          budget = budget,
+                                         max_total_tokens=max_total_tokens,
                                         )
 
             self.state = RecorderState.RUNNING

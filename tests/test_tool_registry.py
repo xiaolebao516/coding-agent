@@ -1,6 +1,6 @@
 import pytest
 
-from coding_agent.tools.bash import BashTool
+from coding_agent.tools.bash import BashArgs, BashTool
 from coding_agent.tools.registry import ToolRegistry
 
 
@@ -23,3 +23,12 @@ def test_registry_rejects_duplicate_tool_names():
             BashTool(),
             BashTool(),
         ])
+
+
+def test_registry_specs_match_registered_tools():
+    registry = ToolRegistry([BashTool()])
+
+    specs = registry.specs()
+
+    assert [spec.name for spec in specs] == ["bash"]
+    assert specs[0].parameters == BashArgs.model_json_schema()

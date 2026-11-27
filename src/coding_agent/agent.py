@@ -1,7 +1,7 @@
 import json
 from typing import Any
 
-from coding_agent.contracts import AgentResult, StopReason, Task, ToolResult
+from coding_agent.contracts import AgentResult, ModelFinishReason, StopReason, Task, ToolResult
 from coding_agent.model import Model
 from coding_agent.runtime.base import Runtime
 from coding_agent.tools.registry import ToolRegistry
@@ -17,22 +17,22 @@ def _add_optional(a, b):
 
 def _merge_usage(total: Usage, current: Usage) -> Usage:
     return Usage(
-        input_tokens=_add_optional(
-            total.input_tokens,
-            current.input_tokens,
+        input_tokens=_add_optional(total.input_tokens, current.input_tokens),
+        cache_read_tokens=_add_optional(
+            total.cache_read_tokens, current.cache_read_tokens
         ),
-        output_tokens=_add_optional(
-            total.output_tokens,
-            current.output_tokens,
-        ),
-        cost_usd=_add_optional(
-            total.cost_usd,
-            current.cost_usd,
-        ),
+        output_tokens=_add_optional(total.output_tokens, current.output_tokens),
+        cost_usd=_add_optional(total.cost_usd, current.cost_usd),
     )
 
 
-def _budget_stop_reason(usage: Usage, budget: float) -> StopReason | None:
+def _budget_stop_reason(
+    usage: Usage,
+    budget: float | None,
+) -> StopReason | None:
+    if budget is None:
+        return None
+
     if usage.cost_usd is None:
         return StopReason.BUDGET_UNKNOWN
 
@@ -42,25 +42,46 @@ def _budget_stop_reason(usage: Usage, budget: float) -> StopReason | None:
     return None
 
 
+def _invalid_action_feedback(detail: str | None) -> str:
+    return (
+        "Your previous response could not be executed"
+        f" ({detail or 'invalid action'}). Reply with exactly one tool call whose"
+        " arguments are a valid JSON object, or with a final answer and no tool call."
+    )
+
+
 class Agent:
     def __init__(
         self,
         model: Model,
         tool_registry: ToolRegistry,
         max_steps: int,
-        budget: float,
+        budget: float | None,
+        max_total_tokens: int | None = None,
     ):
         self.model = model
         self.tool_registry = tool_registry
         self.max_steps = max_steps
         self.budget = budget
+        if max_total_tokens is not None and max_total_tokens <= 0:
+            raise ValueError("max_total_tokens must be positive")
+        self.max_total_tokens = max_total_tokens
 
     def run(
         self, task: Task, runtime: Runtime, recorder: TrajectoryRecorder
     ) -> AgentResult:
-        recorder.start(task.task_id, self.max_steps, self.budget)
+        recorder.start(
+            task_id=task.task_id,
+            provider=self.model.provider,
+            model=self.model.model,
+            max_steps=self.max_steps,
+            budget=self.budget,
+            max_total_tokens=self.max_total_tokens,
+        )
         steps = 0
-        total_usage = Usage(0, 0, 0.0)
+        total_usage = Usage(
+            input_tokens=0, cache_read_tokens=0, output_tokens=0, cost_usd=0.0
+        )
         history: list[dict[str, Any]] = [
             {
                 "role": "user",
@@ -97,6 +118,8 @@ class Agent:
                                 else None
                             ),
                             "usage": response.usage,
+                            "finish_reason": response.finish_reason.value,
+                            "stop_detail": response.stop_detail,
                         },
                     )
                 )
@@ -115,6 +138,70 @@ class Agent:
                 )
                 break
             total_usage = _merge_usage(total_usage, response.usage)
+            if response.finish_reason == ModelFinishReason.OUTPUT_TRUNCATED:
+                result = AgentResult(
+                    StopReason.OUTPUT_TRUNCATED,
+                    final_message=None,
+                    steps=steps,
+                    usage=total_usage,
+                )
+                break
+
+            # Provider refusal/termination cannot be repaired by action feedback.
+            if response.finish_reason == ModelFinishReason.PROVIDER_STOPPED:
+                result = AgentResult(
+                    StopReason.PROVIDER_STOPPED,
+                    final_message=None,
+                    steps=steps,
+                    usage=total_usage,
+                )
+                break
+
+            # A run-level cap is checked AFTER this response's usage is counted,
+            # but BEFORE dispatching any further tool action.
+            if self.max_total_tokens is not None:
+                if (
+                    total_usage.input_tokens is None
+                    or total_usage.output_tokens is None
+                ):
+                    result = AgentResult(
+                        StopReason.TOKEN_USAGE_UNKNOWN,
+                        final_message=None,
+                        steps=steps,
+                        usage=total_usage,
+                    )
+                    break
+
+                total_tokens = (
+                    total_usage.input_tokens + total_usage.output_tokens
+                )
+                # The final response is already complete: no further provider
+                # requests or tool executions need to be authorized.
+                if (
+                    (
+                        response.tool_call is not None
+                        or response.finish_reason == ModelFinishReason.INVALID_ACTION
+                    )
+                    and total_tokens >= self.max_total_tokens
+                ):
+                    result = AgentResult(
+                        StopReason.TOKEN_LIMIT_EXHAUSTED,
+                        final_message=None,
+                        steps=steps,
+                        usage=total_usage,
+                    )
+                    break
+
+            # A recoverable invalid action also counts as a step. Respect the
+            # token cap above before authorizing another model request.
+            if response.finish_reason == ModelFinishReason.INVALID_ACTION:
+                history.append({
+                    "role": "user",
+                    "content": _invalid_action_feedback(response.stop_detail),
+                })
+                steps += 1
+                continue
+
             final_message = response.content
             if response.tool_call is None:
                 result = AgentResult(

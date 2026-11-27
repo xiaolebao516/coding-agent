@@ -1,5 +1,6 @@
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import subprocess
+import shlex
 import uuid
 
 from coding_agent.runtime.base import ProcessResult
@@ -13,11 +14,25 @@ class DockerRuntime:
         image: str,
         process_timeout: float = 120,
         startup_timeout: float = 120,
+        container_workdir: str = "/workspace",
+        container_python_env: str | None = None,
+        match_workspace_owner: bool = False,
     ):
         self.workspace = workspace.resolve()
         self.image = image
         self.process_timeout = process_timeout
         self.startup_timeout = startup_timeout
+        path = PurePosixPath(container_workdir)
+        if not path.is_absolute() or path == PurePosixPath("/") or ".." in path.parts:
+            raise ValueError("container_workdir must be an absolute non-root path without '..'")
+        self.container_workdir = str(path)
+        if container_python_env is not None:
+            env_path = PurePosixPath(container_python_env)
+            if not env_path.is_absolute() or env_path == PurePosixPath("/") or ".." in env_path.parts:
+                raise ValueError("container_python_env must be an absolute non-root path without '..'")
+            container_python_env = str(env_path)
+        self.container_python_env = container_python_env
+        self.match_workspace_owner = match_workspace_owner
         self.container_id: str | None = None
 
     def start(self) -> None:
@@ -28,6 +43,10 @@ class DockerRuntime:
             raise RuntimeError("runtime already started")
 
         container_name = f"coding-agent-{uuid.uuid4().hex[:8]}"
+        user_args = []
+        if self.match_workspace_owner:
+            owner = self.workspace.stat()
+            user_args = ["--user", f"{owner.st_uid}:{owner.st_gid}", "--env", "HOME=/tmp"]
 
         result = subprocess.run(
             [
@@ -35,6 +54,7 @@ class DockerRuntime:
                 "run",
                 "-d",
                 "--rm",
+                "--pull=never",
                 "--name",
                 container_name,
 
@@ -51,9 +71,11 @@ class DockerRuntime:
                 "256",
 
                 "-v",
-                f"{self.workspace}:/workspace",
+                f"{self.workspace}:{self.container_workdir}",
                 "-w",
-                "/workspace",
+                self.container_workdir,
+
+                *user_args,
 
                 self.image,
                 "sleep",
@@ -79,9 +101,18 @@ class DockerRuntime:
     def run_process(self, argv: list[str]) -> ProcessResult:
         if self.container_id is None:
             raise RuntimeError("container is not started")
+        if self.container_python_env is not None:
+            if len(argv) != 3 or argv[:2] != ["bash", "-lc"]:
+                raise ValueError("container_python_env requires bash -lc commands")
+            env = shlex.quote(self.container_python_env)
+            # Set PATH inside the login shell, after its startup files have run.
+            argv = ["bash", "-lc", (
+                f"export PATH={env}/bin:\"$PATH\"; export CONDA_PREFIX={env}; "
+                f"unset PYTHONHOME; hash -r; {argv[2]}"
+            )]
         try:
             result = subprocess.run(
-                ["docker", "exec", "-w", "/workspace", self.container_id, *argv,],
+                ["docker", "exec", "-w", self.container_workdir, self.container_id, *argv,],
                 capture_output=True,
                 text=True,
                 check=False,
