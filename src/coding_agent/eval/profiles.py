@@ -1,4 +1,4 @@
-"""Standard ablation experiment profiles for coding-agent."""
+"""Standard single-variable ablation experiment profiles for coding-agent."""
 
 from __future__ import annotations
 
@@ -36,8 +36,8 @@ ABLATION_PROFILES: dict[str, AblationProfile] = {
         toolset="aci",
         context_strategy="per_step_masking",
         keep_recent_observations=3,
-        enable_reminders=True,
-        description="M4a (+ACI + Per-step Observation Masking + Event Reminders).",
+        enable_reminders=False,
+        description="M4a (+ACI + Per-step Observation Masking only, isolating context compression).",
     ),
     "aci_epoch": AblationProfile(
         name="aci_epoch",
@@ -45,8 +45,17 @@ ABLATION_PROFILES: dict[str, AblationProfile] = {
         context_strategy="epoch_masking",
         keep_recent_observations=3,
         mask_epoch_steps=4,
+        enable_reminders=False,
+        description="M4b (+ACI + Epoch-based Masking only, isolating Prefix Cache protection).",
+    ),
+    "aci_epoch_remind": AblationProfile(
+        name="aci_epoch_remind",
+        toolset="aci",
+        context_strategy="epoch_masking",
+        keep_recent_observations=3,
+        mask_epoch_steps=4,
         enable_reminders=True,
-        description="M4b (+ACI + Epoch-based Masking for Prefix Cache + Event Reminders).",
+        description="M4c (+ACI + Epoch-based Masking + Event Reminders, isolating reminder gain).",
     ),
 }
 

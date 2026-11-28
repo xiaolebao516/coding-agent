@@ -42,6 +42,8 @@ class MiddlewareStats:
     chars_after: int = 0
     total_input_tokens: int = 0
     total_cache_read_tokens: int = 0
+    cache_observed_input_tokens: int = 0
+    cache_observed_calls: int = 0
     step_metrics: list[dict[str, Any]] = field(default_factory=list)
 
     @property
@@ -51,12 +53,18 @@ class MiddlewareStats:
         return max(0.0, 1.0 - (self.chars_after / self.chars_before))
 
     @property
-    def cache_hit_rate(self) -> float:
-        if self.total_input_tokens <= 0:
-            return 0.0
-        return self.total_cache_read_tokens / self.total_input_tokens
+    def cache_hit_rate(self) -> float | None:
+        """Return cache hit ratio only when cache_read_tokens telemetry is reported.
+
+        Returns ``None`` (unknown) rather than ``0.0`` when the provider does not
+        report ``cache_read_tokens``.
+        """
+        if self.cache_observed_calls == 0 or self.cache_observed_input_tokens <= 0:
+            return None
+        return self.total_cache_read_tokens / self.cache_observed_input_tokens
 
     def to_dict(self) -> dict[str, Any]:
+        rate = self.cache_hit_rate
         return {
             "total_calls": self.total_calls,
             "compaction_events": self.compaction_events,
@@ -68,7 +76,8 @@ class MiddlewareStats:
             "char_reduction_ratio": round(self.char_reduction_ratio, 4),
             "total_input_tokens": self.total_input_tokens,
             "total_cache_read_tokens": self.total_cache_read_tokens,
-            "cache_hit_rate": round(self.cache_hit_rate, 4),
+            "cache_observed_calls": self.cache_observed_calls,
+            "cache_hit_rate": round(rate, 4) if rate is not None else None,
         }
 
 
@@ -168,8 +177,6 @@ class ContextMaskingMiddleware:
         if self.strategy == "per_step_masking":
             target_mask_count = eligible_to_mask
         else:
-            # epoch_masking: only advance the watermark every K new tool observations
-            # so intermediate calls append strictly to the tail without invalidating Prefix Cache.
             if eligible_to_mask - self._watermark_tool_count >= self.mask_epoch_steps:
                 self._watermark_tool_count = eligible_to_mask
             target_mask_count = self._watermark_tool_count
@@ -227,7 +234,6 @@ class EventReminderMiddleware:
 
         reminders: list[str] = []
 
-        # 1. Detect consecutive read-only exploration without edits
         recent_tools = self._recent_assistant_tool_calls(history)
         if len(recent_tools) >= self.read_only_threshold:
             tail = recent_tools[-self.read_only_threshold :]
@@ -238,14 +244,12 @@ class EventReminderMiddleware:
                     "and test or apply a targeted fix."
                 )
 
-        # 2. Detect repeated identical failing tool calls
         if self._repeated_failing_call(history, self.repeat_failure_threshold):
             reminders.append(
                 "[System Reminder] The exact same tool call has failed repeatedly. "
                 "Do not repeat the identical command; inspect the error output and change strategy."
             )
 
-        # 3. Detect approaching max_steps limit
         if state.max_steps is not None:
             completed_steps = sum(1 for m in history if m.get("role") == "tool")
             remaining = state.max_steps - completed_steps
@@ -345,7 +349,9 @@ class MiddlewareModel:
         if usage is not None:
             if usage.input_tokens is not None:
                 self.state.stats.total_input_tokens += usage.input_tokens
-            if usage.cache_read_tokens is not None:
+            if usage.input_tokens is not None and usage.cache_read_tokens is not None:
+                self.state.stats.cache_observed_calls += 1
+                self.state.stats.cache_observed_input_tokens += usage.input_tokens
                 self.state.stats.total_cache_read_tokens += usage.cache_read_tokens
 
         self.state.stats.step_metrics.append({
