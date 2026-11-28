@@ -111,16 +111,18 @@ def run_ablation_task(
 
     stem = f"{profile.name}__{task_spec.task_id}"
     traj_path = output_dir / f"{stem}.trajectory.json"
-    recorder.save(traj_path)
+    assert recorder.trajectory is not None
+    traj_path.write_text(
+        json.dumps(recorder.trajectory.to_dict(), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
-    invalid_action_events = 0
-    if recorder.trajectory is not None:
-        invalid_action_events = sum(
-            1
-            for ev in recorder.trajectory.events
-            if ev.type == "model_response"
-            and ev.data.get("finish_reason") == ModelFinishReason.INVALID_ACTION.value
-        )
+    invalid_action_events = sum(
+        1
+        for ev in recorder.trajectory.events
+        if ev.type == "model_response"
+        and ev.data.get("finish_reason") == ModelFinishReason.INVALID_ACTION.value
+    )
 
     record: dict[str, Any] = {
         "profile": profile.name,
