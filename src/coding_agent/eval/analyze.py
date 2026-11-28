@@ -15,10 +15,12 @@ class ProfileSummary:
     profile: str
     total_tasks: int
     resolved_tasks: int
+    runner_error_tasks: int
+    tampered_tasks: int
     avg_steps: float
     avg_input_tokens: float
     avg_output_tokens: float
-    cache_hit_rate: float
+    cache_hit_rate: float | None
     avg_cost_usd: float | None
     avg_prefix_invalidations: float
     invalid_action_events: int
@@ -46,12 +48,26 @@ def summarize_records(records: list[dict[str, Any]]) -> list[ProfileSummary]:
     for profile, items in grouped.items():
         n = len(items)
         resolved = sum(1 for r in items if r.get("resolved"))
+        runner_errors = sum(1 for r in items if r.get("stop_reason") == "eval_runner_error")
+        tampered = sum(1 for r in items if r.get("tampered_test_files"))
         avg_steps = sum(int(r.get("steps", 0)) for r in items) / n
 
         total_in = sum(int((r.get("usage") or {}).get("input_tokens") or 0) for r in items)
         total_out = sum(int((r.get("usage") or {}).get("output_tokens") or 0) for r in items)
-        total_cache = sum(int((r.get("usage") or {}).get("cache_read_tokens") or 0) for r in items)
-        cache_hit = (total_cache / total_in) if total_in > 0 else 0.0
+
+        # Distinguish missing cache telemetry (None) from genuine 0% cache hits
+        cache_in = 0
+        cache_read = 0
+        cache_records = 0
+        for r in items:
+            usage = r.get("usage") or {}
+            in_tok = usage.get("input_tokens")
+            cr_tok = usage.get("cache_read_tokens")
+            if in_tok is not None and cr_tok is not None:
+                cache_records += 1
+                cache_in += int(in_tok)
+                cache_read += int(cr_tok)
+        cache_hit = (cache_read / cache_in) if (cache_records > 0 and cache_in > 0) else None
 
         costs = [
             (r.get("usage") or {}).get("cost_usd")
@@ -71,6 +87,8 @@ def summarize_records(records: list[dict[str, Any]]) -> list[ProfileSummary]:
                 profile=profile,
                 total_tasks=n,
                 resolved_tasks=resolved,
+                runner_error_tasks=runner_errors,
+                tampered_tasks=tampered,
                 avg_steps=avg_steps,
                 avg_input_tokens=total_in / n,
                 avg_output_tokens=total_out / n,
@@ -85,18 +103,20 @@ def summarize_records(records: list[dict[str, Any]]) -> list[ProfileSummary]:
 
 def render_markdown_table(summaries: list[ProfileSummary]) -> str:
     header = (
-        "| Profile | Tasks | Resolved Rate | Avg Steps | Avg Input Tokens | "
-        "Prefix Cache Hit | Prefix Invalidations/Task | Avg Cost (USD) |"
+        "| Profile | Tasks | Resolved Rate | Runner Errors | Avg Steps | "
+        "Avg Input Tokens | Prefix Cache Hit | Prefix Invalidations/Task | Avg Cost (USD) |"
     )
-    sep = "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |"
+    sep = "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |"
     rows = [header, sep]
     for s in summaries:
         cost_str = f"${s.avg_cost_usd:.4f}" if s.avg_cost_usd is not None else "N/A"
+        cache_str = f"{s.cache_hit_rate * 100:.1f}%" if s.cache_hit_rate is not None else "N/A"
         rows.append(
             f"| `{s.profile}` | {s.total_tasks} | "
             f"{s.resolved_tasks}/{s.total_tasks} ({s.resolved_rate * 100:.1f}%) | "
+            f"{s.runner_error_tasks} | "
             f"{s.avg_steps:.2f} | {s.avg_input_tokens:,.0f} | "
-            f"{s.cache_hit_rate * 100:.1f}% | {s.avg_prefix_invalidations:.2f} | {cost_str} |"
+            f"{cache_str} | {s.avg_prefix_invalidations:.2f} | {cost_str} |"
         )
     return "\n".join(rows)
 

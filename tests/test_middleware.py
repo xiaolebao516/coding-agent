@@ -61,7 +61,6 @@ def test_per_step_masking_masks_old_observations_and_preserves_recent():
 
     wrapped.generate(history)
 
-    # Caller history is never mutated in place
     assert history == original_snapshot
 
     seen = base.seen_histories[0]
@@ -73,6 +72,17 @@ def test_per_step_masking_masks_old_observations_and_preserves_recent():
     assert wrapped.stats.compaction_events == 1
     assert wrapped.stats.char_reduction_ratio > 0.35
     assert wrapped.stats.cache_hit_rate == pytest.approx(0.2)
+
+
+def test_missing_cache_telemetry_reports_none_instead_of_zero():
+    base = RecordingFakeModel([
+        ModelResponse(content="done", tool_call=None, usage=Usage(input_tokens=500, cache_read_tokens=None, output_tokens=20))
+    ])
+    wrapped = MiddlewareModel(base, [ContextMaskingMiddleware(strategy="full")])
+    wrapped.generate([{"role": "user", "content": "hi"}])
+
+    assert wrapped.stats.cache_hit_rate is None
+    assert wrapped.stats.to_dict()["cache_hit_rate"] is None
 
 
 def test_epoch_masking_reduces_prefix_invalidations_compared_to_per_step():
@@ -94,8 +104,6 @@ def test_epoch_masking_reduces_prefix_invalidations_compared_to_per_step():
         per_step_model.generate(hist)
         epoch_model.generate(hist)
 
-    # Per-step invalidates prefix on every single turn (6 times);
-    # Epoch masking (K=3) only invalidates when watermark jumps by >= 3 (2 times).
     assert per_step_model.stats.prefix_invalidations == 6
     assert epoch_model.stats.prefix_invalidations == 2
 
@@ -113,7 +121,6 @@ def test_event_reminder_detects_read_only_loop_and_low_steps_without_mutating_pr
     wrapped.generate(history)
 
     seen = base.seen_histories[0]
-    # Leading user prompt is untouched (Prefix Cache safe)
     assert seen[0]["content"] == "Fix bug"
     assert "consecutive read-only calls" in seen[-1]["stdout"]
     assert "Only 1 step(s) remaining" in seen[-1]["stdout"]
