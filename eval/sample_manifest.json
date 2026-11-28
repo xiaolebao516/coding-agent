@@ -1,0 +1,9 @@
+[
+  {
+    "task_id": "example-pytest-bug-01",
+    "problem_statement": "Replace with the issue description from SWE-bench Lite/Verified or your local Python repository.",
+    "workspace": "../workspaces/example-pytest-bug-01",
+    "image": "python:3.12-slim",
+    "verify_command": "pytest -q"
+  }
+]
